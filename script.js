@@ -448,7 +448,8 @@ generateBtn.addEventListener('click', async () => {
                 const x = col * cellWidth + item.offsetX * (cellWidth - w);
                 const y = row * cellHeight + item.offsetY * (cellHeight - h);
 
-                doc.addImage(img, 'JPEG', x, y, w, h, undefined, undefined, 0, {quality: 1});
+                const format = img.src.split(';')[0].split('/')[1].toUpperCase();
+                doc.addImage(img.src, format, x, y, w, h);
             });
         }
 
