@@ -1,152 +1,430 @@
-const imagesInput = document.getElementById("images");
-const generateBtn = document.getElementById("generate");
-const modeSelect = document.getElementById("mode");
-const statusEl = document.getElementById("status");
-const previewContainer = document.getElementById("preview");
-const editPositionsBtn = document.getElementById("editPositions");
+```javascript
+// DOM elements
+const imagesInput = document.getElementById('images');
+const generateBtn = document.getElementById('generate');
+const modeSelect = document.getElementById('mode');
+const statusEl = document.getElementById('status');
+const previewContainer = document.getElementById('preview');
+const editPositionsBtn = document.getElementById('editPositions');
 
+const modal = document.getElementById('modal');
+const pagePreview = document.getElementById('pagePreview');
+const closeBtn = document.querySelector('.close');
+
+const zoomInBtn = document.getElementById('zoomIn');
+const zoomOutBtn = document.getElementById('zoomOut');
+const zoomLevelEl = document.getElementById('zoomLevel');
+
+const prevPageBtn = document.getElementById('prevPage');
+const nextPageBtn = document.getElementById('nextPage');
+const pageInfoEl = document.getElementById('pageInfo');
+
+// GLOBAL STATE
 let selectedFiles = [];
+let currentPage = 0;
+let totalPages = 0;
+let zoom = 1;
 
-function updateStatus(msg) {
-  statusEl.textContent = msg;
+
+// IMAGE LOADER
+function loadImage(file){
+    return new Promise((resolve,reject)=>{
+
+        const reader = new FileReader();
+
+        reader.onload = ()=>{
+
+            const img = new Image();
+
+            img.onload = ()=> resolve(img);
+            img.onerror = reject;
+
+            img.src = reader.result;
+
+        };
+
+        reader.readAsDataURL(file);
+
+    });
 }
 
-function loadImage(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
 
-    reader.onload = function () {
-      const img = new Image();
-      img.onload = () => resolve(img);
-      img.onerror = reject;
-      img.src = reader.result;
-    };
-
-    reader.readAsDataURL(file);
-  });
+// STATUS TEXT
+function updateStatus(msg){
+    statusEl.textContent = msg;
 }
 
-function renderPreview() {
-  previewContainer.innerHTML = "";
 
-  selectedFiles.forEach((item, index) => {
-    const wrapper = document.createElement("div");
-    wrapper.className = "preview-item";
+// PREVIEW THUMBNAILS
+function renderPreview(){
 
-    const img = document.createElement("img");
-    img.src = URL.createObjectURL(item.file);
+    previewContainer.innerHTML="";
 
-    const orientation = document.createElement("select");
+    selectedFiles.forEach(item=>{
 
-    ["portrait", "landscape"].forEach((o) => {
-      const opt = document.createElement("option");
-      opt.value = o;
-      opt.textContent = o;
+        const div = document.createElement("div");
+        div.className="preview-item";
 
-      if (o === item.orientation) opt.selected = true;
+        const img = document.createElement("img");
+        img.src = URL.createObjectURL(item.file);
 
-      orientation.appendChild(opt);
+        const select = document.createElement("select");
+
+        ["portrait","landscape"].forEach(o=>{
+
+            const opt = document.createElement("option");
+
+            opt.value=o;
+            opt.textContent=o;
+
+            if(item.orientation===o) opt.selected=true;
+
+            select.appendChild(opt);
+
+        });
+
+        select.addEventListener("change",e=>{
+            item.orientation=e.target.value;
+        });
+
+        div.appendChild(img);
+        div.appendChild(select);
+
+        previewContainer.appendChild(div);
+
     });
 
-    orientation.addEventListener("change", (e) => {
-      item.orientation = e.target.value;
-    });
-
-    wrapper.appendChild(img);
-    wrapper.appendChild(orientation);
-
-    previewContainer.appendChild(wrapper);
-  });
 }
 
-imagesInput.addEventListener("change", () => {
-  selectedFiles = Array.from(imagesInput.files).map((file) => ({
-    file,
-    orientation: "portrait",
-    offsetX: 0.5,
-    offsetY: 0.5,
-    scale: 1,
-  }));
 
-  renderPreview();
+// FILE SELECT
+imagesInput.addEventListener("change",()=>{
 
-  editPositionsBtn.disabled = selectedFiles.length === 0;
+    selectedFiles = Array.from(imagesInput.files).map(file=>({
+
+        file:file,
+        orientation:"portrait",
+        offsetX:0.5,
+        offsetY:0.5,
+        scale:1
+
+    }));
+
+    renderPreview();
+
+    editPositionsBtn.disabled = selectedFiles.length===0;
+
 });
 
-generateBtn.addEventListener("click", async () => {
-  if (selectedFiles.length === 0) {
-    updateStatus("Please select images.");
-    return;
-  }
 
-  updateStatus("Loading images...");
+// UNIVERSAL DRAG (MOUSE + TOUCH)
+function enableDrag(element,item,cellWidth,cellHeight){
 
-  try {
-    const imgs = await Promise.all(selectedFiles.map((i) => loadImage(i.file)));
+    let startX,startY;
 
-    const { jsPDF } = window.jspdf;
+    function start(e){
+
+        const evt = e.touches ? e.touches[0] : e;
+
+        startX = evt.clientX - parseFloat(element.style.left);
+        startY = evt.clientY - parseFloat(element.style.top);
+
+        document.addEventListener("mousemove",move);
+        document.addEventListener("touchmove",move);
+
+        document.addEventListener("mouseup",end);
+        document.addEventListener("touchend",end);
+
+    }
+
+    function move(e){
+
+        const evt = e.touches ? e.touches[0] : e;
+
+        let x = evt.clientX - startX;
+        let y = evt.clientY - startY;
+
+        element.style.left = x+"px";
+        element.style.top = y+"px";
+
+    }
+
+    function end(){
+
+        document.removeEventListener("mousemove",move);
+        document.removeEventListener("touchmove",move);
+
+        document.removeEventListener("mouseup",end);
+        document.removeEventListener("touchend",end);
+
+        const finalX = parseFloat(element.style.left);
+        const finalY = parseFloat(element.style.top);
+
+        item.offsetX = finalX / cellWidth;
+        item.offsetY = finalY / cellHeight;
+
+    }
+
+    element.addEventListener("mousedown",start);
+    element.addEventListener("touchstart",start);
+
+}
+
+
+// PAGE LOADER
+async function loadPage(){
 
     const mode = modeSelect.value;
 
-    let perPage = mode === "grid" ? 4 : 1;
-    let rows = mode === "grid" ? 2 : 1;
-    let cols = mode === "grid" ? 2 : 1;
+    let perPage = mode==="grid"?4:1;
+    let rows = mode==="grid"?2:1;
+    let cols = mode==="grid"?2:1;
 
-    let doc;
+    const startIdx = currentPage*perPage;
 
-    for (let i = 0; i < imgs.length; i += perPage) {
-      const orientation = selectedFiles[i].orientation;
+    const slice = selectedFiles.slice(startIdx,startIdx+perPage);
 
-      if (!doc) {
-        doc = new jsPDF({
-          orientation: orientation,
-          unit: "pt",
-          format: "a4",
-        });
-      } else {
-        doc.addPage("a4", orientation);
-      }
+    const orientation = slice[0]?.orientation || "portrait";
 
-      const pageWidth = doc.internal.pageSize.getWidth();
-      const pageHeight = doc.internal.pageSize.getHeight();
+    const pageWidth = orientation==="portrait"?595:842;
+    const pageHeight = orientation==="portrait"?842:595;
 
-      const cellWidth = pageWidth / cols;
-      const cellHeight = pageHeight / rows;
+    pagePreview.style.width = (pageWidth*zoom)+"px";
+    pagePreview.style.height = (pageHeight*zoom)+"px";
 
-      const slice = imgs.slice(i, i + perPage);
+    pagePreview.innerHTML="";
 
-      slice.forEach((img, idx) => {
-        const row = Math.floor(idx / cols);
-        const col = idx % cols;
+    const imgs = await Promise.all(slice.map(i=>loadImage(i.file)));
+
+    const cellWidth = pageWidth/cols;
+    const cellHeight = pageHeight/rows;
+
+
+    imgs.forEach((img,idx)=>{
+
+        const row = Math.floor(idx/cols);
+        const col = idx%cols;
 
         let w = img.width;
         let h = img.height;
 
-        const ratio = Math.min(cellWidth / w, cellHeight / h);
+        const ratio = Math.min(cellWidth/w,cellHeight/h);
 
-        w *= ratio;
-        h *= ratio;
+        w*=ratio;
+        h*=ratio;
 
-        const item = selectedFiles[i + idx];
+        const item = slice[idx];
 
-        w *= item.scale;
-        h *= item.scale;
+        w*=item.scale;
+        h*=item.scale;
 
-        const x = col * cellWidth + item.offsetX * (cellWidth - w);
-        const y = row * cellHeight + item.offsetY * (cellHeight - h);
+        const x = col*cellWidth + item.offsetX*(cellWidth-w);
+        const y = row*cellHeight + item.offsetY*(cellHeight-h);
 
-        doc.addImage(img.src, "JPEG", x, y, w, h);
-      });
+        const imgEl = document.createElement("img");
+
+        imgEl.src = img.src;
+
+        imgEl.style.position="absolute";
+        imgEl.style.left=(x*zoom)+"px";
+        imgEl.style.top=(y*zoom)+"px";
+
+        imgEl.style.width=(w*zoom)+"px";
+        imgEl.style.height=(h*zoom)+"px";
+
+        enableDrag(imgEl,item,cellWidth,cellHeight);
+
+        pagePreview.appendChild(imgEl);
+
+    });
+
+    pageInfoEl.textContent = `Page ${currentPage+1} / ${totalPages}`;
+
+}
+
+
+// EDIT POSITIONS
+editPositionsBtn.addEventListener("click",async()=>{
+
+    if(selectedFiles.length===0){
+        updateStatus("Select images first");
+        return;
     }
 
-    updateStatus("Saving PDF...");
+    const mode = modeSelect.value;
 
-    doc.save("images.pdf");
+    let perPage = mode==="grid"?4:1;
 
-    updateStatus("PDF Generated Successfully");
+    totalPages = Math.ceil(selectedFiles.length/perPage);
 
-  } catch (err) {
-    console.error(err);
-    updateStatus("PDF generation failed. Check console.");
-  }
+    currentPage=0;
+    zoom=1;
+
+    await loadPage();
+
+    modal.style.display="block";
+
 });
+
+
+// PAGE NAVIGATION
+prevPageBtn.onclick = async()=>{
+
+    if(currentPage>0){
+
+        currentPage--;
+
+        await loadPage();
+
+    }
+
+};
+
+nextPageBtn.onclick = async()=>{
+
+    if(currentPage<totalPages-1){
+
+        currentPage++;
+
+        await loadPage();
+
+    }
+
+};
+
+
+// ZOOM PAGE
+function updateZoom(){
+
+    zoomLevelEl.textContent = Math.round(zoom*100)+"%";
+
+    loadPage();
+
+}
+
+zoomInBtn.onclick=()=>{
+
+    zoom = Math.min(zoom+0.25,3);
+
+    updateZoom();
+
+};
+
+zoomOutBtn.onclick=()=>{
+
+    zoom = Math.max(zoom-0.25,0.5);
+
+    updateZoom();
+
+};
+
+
+// CLOSE MODAL
+closeBtn.onclick = ()=> modal.style.display="none";
+
+window.onclick = (e)=>{
+
+    if(e.target===modal){
+
+        modal.style.display="none";
+
+    }
+
+};
+
+
+// GENERATE PDF
+generateBtn.addEventListener("click",async()=>{
+
+    if(selectedFiles.length===0){
+
+        updateStatus("Select images");
+
+        return;
+
+    }
+
+    try{
+
+        updateStatus("Loading images...");
+
+        const imgs = await Promise.all(selectedFiles.map(i=>loadImage(i.file)));
+
+        const {jsPDF} = window.jspdf;
+
+        const mode = modeSelect.value;
+
+        let perPage = mode==="grid"?4:1;
+        let rows = mode==="grid"?2:1;
+        let cols = mode==="grid"?2:1;
+
+        let doc;
+
+        for(let i=0;i<imgs.length;i+=perPage){
+
+            const orientation = selectedFiles[i].orientation;
+
+            if(!doc){
+
+                doc = new jsPDF({
+                    orientation:orientation,
+                    unit:"pt",
+                    format:"a4"
+                });
+
+            }else{
+
+                doc.addPage("a4",orientation);
+
+            }
+
+            const pageWidth = doc.internal.pageSize.getWidth();
+            const pageHeight = doc.internal.pageSize.getHeight();
+
+            const cellWidth = pageWidth/cols;
+            const cellHeight = pageHeight/rows;
+
+            const slice = imgs.slice(i,i+perPage);
+
+            slice.forEach((img,idx)=>{
+
+                const row = Math.floor(idx/cols);
+                const col = idx%cols;
+
+                let w = img.width;
+                let h = img.height;
+
+                const ratio = Math.min(cellWidth/w,cellHeight/h);
+
+                w*=ratio;
+                h*=ratio;
+
+                const item = selectedFiles[i+idx];
+
+                w*=item.scale;
+                h*=item.scale;
+
+                const x = col*cellWidth + item.offsetX*(cellWidth-w);
+                const y = row*cellHeight + item.offsetY*(cellHeight-h);
+
+                doc.addImage(img.src,"JPEG",x,y,w,h);
+
+            });
+
+        }
+
+        doc.save("images.pdf");
+
+        updateStatus("PDF Ready");
+
+    }
+    catch(err){
+
+        console.error(err);
+
+        updateStatus("Error generating PDF");
+
+    }
+
+});
+```
