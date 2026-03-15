@@ -1,51 +1,92 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-    <meta charset="UTF-8" />
-    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Image to PDF Converter</title>
-    <link rel="stylesheet" href="style.css" />
+
+<meta charset="UTF-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+
+<title>Image to PDF Converter</title>
+
+<link rel="stylesheet" href="style.css">
+
 </head>
+
 <body>
-    <div class="container">
-        <h1>📄 Image to PDF Converter</h1>
-        <p>Select multiple images and choose conversion mode.</p>
-        <div class="controls">
-            <input type="file" id="images" multiple accept="image/*" />
-            <label for="images" class="upload-btn">Choose Images</label>
-            <select id="mode">
-                <option value="normal">Normal (1 image per page)</option>
-                <option value="grid" selected>2x2 Grid (4 images per page)</option>
-            </select>
-            <button id="editPositions" disabled>Edit Positions</button>
-            <button id="generate">Generate PDF</button>
-        </div>
-        <div id="preview" class="preview-container">
-            <!-- thumbnails with orientation and drag handles will appear here -->
-        </div>
-        <p id="status"></p>
-    </div>
-    <div id="modal" class="modal">
-        <div class="modal-content">
-            <span class="close">&times;</span>
-            <h2>Edit Positions</h2>
-            <div class="zoom-controls">
-                <button id="zoomOut">-</button>
-                <span id="zoomLevel">100%</span>
-                <button id="zoomIn">+</button>
-            </div>
-            <div class="page-controls">
-                <button id="prevPage">Prev</button>
-                <span id="pageInfo">Page 1 of 1</span>
-                <button id="nextPage">Next</button>
-            </div>
-            <div id="pagePreview" class="page-preview">
-                <!-- images will be added here -->
-            </div>
-        </div>
-    </div>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-    <script src="script.js"></script>
+
+<div class="container">
+
+<h1>📄 Image to PDF Converter</h1>
+
+<p>Select multiple images and choose conversion mode.</p>
+
+<div class="controls">
+
+<input type="file" id="images" multiple accept="image/*" hidden>
+
+<label for="images" class="upload-btn">Choose Images</label>
+
+<select id="mode">
+
+<option value="normal">Normal (1 image per page)</option>
+
+<option value="grid" selected>2x2 Grid (4 images per page)</option>
+
+</select>
+
+<button id="editPositions" disabled>Edit Positions</button>
+
+<button id="generate">Generate PDF</button>
+
+</div>
+
+<div id="preview" class="preview-container"></div>
+
+<p id="status"></p>
+
+</div>
+
+
+<div id="modal" class="modal">
+
+<div class="modal-content">
+
+<span class="close">&times;</span>
+
+<h2>Edit Positions</h2>
+
+<div class="zoom-controls">
+
+<button id="zoomOut">-</button>
+
+<span id="zoomLevel">100%</span>
+
+<button id="zoomIn">+</button>
+
+</div>
+
+<div class="page-controls">
+
+<button id="prevPage">Prev</button>
+
+<span id="pageInfo">Page 1 of 1</span>
+
+<button id="nextPage">Next</button>
+
+</div>
+
+<div id="pagePreview" class="page-preview"></div>
+
+</div>
+
+</div>
+
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+<script defer src="script.js"></script>
+
 </body>
 </html>
