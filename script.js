@@ -24,6 +24,19 @@ let totalPages    = 0;
 let zoom          = 1;   // canvas/page-view zoom (existing)
 
 
+// ─── Grid config helper ───────────────────────────────────────────────────────
+// Returns { perPage, rows, cols } for the current mode.
+
+function getGridConfig(mode) {
+  switch (mode) {
+    case "grid":   return { perPage: 4, rows: 2, cols: 2 };
+    case "grid6":  return { perPage: 6, rows: 3, cols: 2 };
+    case "grid8":  return { perPage: 8, rows: 4, cols: 2 };
+    default:       return { perPage: 1, rows: 1, cols: 1 };  // "single"
+  }
+}
+
+
 // ─── Load image from file ─────────────────────────────────────────────────────
 
 function loadImage(file) {
@@ -232,10 +245,7 @@ function enableImageScale(wrapper, item, onScaleChange) {
 // ─── Page editor ─────────────────────────────────────────────────────────────
 
 async function loadPage() {
-  const mode    = modeSelect.value;
-  const perPage = mode === "grid" ? 4 : 1;
-  const rows    = mode === "grid" ? 2 : 1;
-  const cols    = mode === "grid" ? 2 : 1;
+  const { perPage, rows, cols } = getGridConfig(modeSelect.value);
 
   const startIdx = currentPage * perPage;
   const slice    = selectedFiles.slice(startIdx, startIdx + perPage);
@@ -313,7 +323,7 @@ async function loadPage() {
 editPositionsBtn.addEventListener("click", async () => {
   if (selectedFiles.length === 0) { updateStatus("Select images first"); return; }
 
-  const perPage = modeSelect.value === "grid" ? 4 : 1;
+  const { perPage } = getGridConfig(modeSelect.value);
   totalPages  = Math.ceil(selectedFiles.length / perPage);
   currentPage = 0;
   zoom        = 1;
@@ -356,10 +366,7 @@ generateBtn.addEventListener("click", async () => {
     const imgs = await Promise.all(selectedFiles.map(i => loadImage(i.file)));
     const { jsPDF } = window.jspdf;
 
-    const mode    = modeSelect.value;
-    const perPage = mode === "grid" ? 4 : 1;
-    const rows    = mode === "grid" ? 2 : 1;
-    const cols    = mode === "grid" ? 2 : 1;
+    const { perPage, rows, cols } = getGridConfig(modeSelect.value);
 
     let doc;
 
