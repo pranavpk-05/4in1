@@ -19,412 +19,382 @@ const prevPageBtn = document.getElementById('prevPage');
 const nextPageBtn = document.getElementById('nextPage');
 const pageInfoEl = document.getElementById('pageInfo');
 
-// GLOBAL STATE
 let selectedFiles = [];
 let currentPage = 0;
 let totalPages = 0;
 let zoom = 1;
 
 
-// IMAGE LOADER
+// Load image from file
 function loadImage(file){
-    return new Promise((resolve,reject)=>{
+return new Promise((resolve,reject)=>{
+const reader = new FileReader();
 
-        const reader = new FileReader();
+reader.onload = () => {
+const img = new Image();
+img.onload = () => resolve(img);
+img.onerror = reject;
+img.src = reader.result;
+};
 
-        reader.onload = ()=>{
-
-            const img = new Image();
-
-            img.onload = ()=> resolve(img);
-            img.onerror = reject;
-
-            img.src = reader.result;
-
-        };
-
-        reader.readAsDataURL(file);
-
-    });
+reader.readAsDataURL(file);
+});
 }
 
 
-// STATUS TEXT
+// Status
 function updateStatus(msg){
-    statusEl.textContent = msg;
+statusEl.textContent = msg;
 }
 
 
-// PREVIEW THUMBNAILS
+// Preview thumbnails
 function renderPreview(){
 
-    previewContainer.innerHTML="";
+previewContainer.innerHTML="";
 
-    selectedFiles.forEach(item=>{
+selectedFiles.forEach(item=>{
 
-        const div = document.createElement("div");
-        div.className="preview-item";
+const div=document.createElement("div");
+div.className="preview-item";
 
-        const img = document.createElement("img");
-        img.src = URL.createObjectURL(item.file);
+const img=document.createElement("img");
+img.src=URL.createObjectURL(item.file);
 
-        const select = document.createElement("select");
+const sel=document.createElement("select");
 
-        ["portrait","landscape"].forEach(o=>{
+["portrait","landscape"].forEach(o=>{
+const opt=document.createElement("option");
+opt.value=o;
+opt.textContent=o;
 
-            const opt = document.createElement("option");
+if(item.orientation===o) opt.selected=true;
 
-            opt.value=o;
-            opt.textContent=o;
+sel.appendChild(opt);
+});
 
-            if(item.orientation===o) opt.selected=true;
+sel.addEventListener("change",e=>{
+item.orientation=e.target.value;
+});
 
-            select.appendChild(opt);
+div.appendChild(img);
+div.appendChild(sel);
 
-        });
+previewContainer.appendChild(div);
 
-        select.addEventListener("change",e=>{
-            item.orientation=e.target.value;
-        });
-
-        div.appendChild(img);
-        div.appendChild(select);
-
-        previewContainer.appendChild(div);
-
-    });
-
+});
 }
 
 
-// FILE SELECT
+// Image selection
 imagesInput.addEventListener("change",()=>{
 
-    selectedFiles = Array.from(imagesInput.files).map(file=>({
+selectedFiles = Array.from(imagesInput.files).map(file=>({
+file:file,
+orientation:"portrait",
+offsetX:0.5,
+offsetY:0.5,
+scale:1
+}));
 
-        file:file,
-        orientation:"portrait",
-        offsetX:0.5,
-        offsetY:0.5,
-        scale:1
+renderPreview();
 
-    }));
-
-    renderPreview();
-
-    editPositionsBtn.disabled = selectedFiles.length===0;
+editPositionsBtn.disabled = selectedFiles.length===0;
 
 });
 
 
-// UNIVERSAL DRAG (MOUSE + TOUCH)
-function enableDrag(element,item,cellWidth,cellHeight){
+// Drag system
+function enableDrag(el,item,cellWidth,cellHeight){
 
-    let startX,startY;
+let startX,startY;
 
-    function start(e){
+function start(e){
 
-        const evt = e.touches ? e.touches[0] : e;
+const evt = e.touches ? e.touches[0] : e;
 
-        startX = evt.clientX - parseFloat(element.style.left);
-        startY = evt.clientY - parseFloat(element.style.top);
+startX = evt.clientX - parseFloat(el.style.left);
+startY = evt.clientY - parseFloat(el.style.top);
 
-        document.addEventListener("mousemove",move);
-        document.addEventListener("touchmove",move);
+document.addEventListener("mousemove",move);
+document.addEventListener("touchmove",move);
 
-        document.addEventListener("mouseup",end);
-        document.addEventListener("touchend",end);
+document.addEventListener("mouseup",end);
+document.addEventListener("touchend",end);
 
-    }
+}
 
-    function move(e){
+function move(e){
 
-        const evt = e.touches ? e.touches[0] : e;
+const evt = e.touches ? e.touches[0] : e;
 
-        let x = evt.clientX - startX;
-        let y = evt.clientY - startY;
+let x = evt.clientX - startX;
+let y = evt.clientY - startY;
 
-        element.style.left = x+"px";
-        element.style.top = y+"px";
+el.style.left = x + "px";
+el.style.top = y + "px";
 
-    }
+}
 
-    function end(){
+function end(){
 
-        document.removeEventListener("mousemove",move);
-        document.removeEventListener("touchmove",move);
+document.removeEventListener("mousemove",move);
+document.removeEventListener("touchmove",move);
 
-        document.removeEventListener("mouseup",end);
-        document.removeEventListener("touchend",end);
+document.removeEventListener("mouseup",end);
+document.removeEventListener("touchend",end);
 
-        const finalX = parseFloat(element.style.left);
-        const finalY = parseFloat(element.style.top);
+const finalX=parseFloat(el.style.left);
+const finalY=parseFloat(el.style.top);
 
-        item.offsetX = finalX / cellWidth;
-        item.offsetY = finalY / cellHeight;
+item.offsetX = finalX / cellWidth;
+item.offsetY = finalY / cellHeight;
 
-    }
+}
 
-    element.addEventListener("mousedown",start);
-    element.addEventListener("touchstart",start);
+el.addEventListener("mousedown",start);
+el.addEventListener("touchstart",start);
 
 }
 
 
-// PAGE LOADER
+// Load page editor
 async function loadPage(){
 
-    const mode = modeSelect.value;
+const mode = modeSelect.value;
 
-    let perPage = mode==="grid"?4:1;
-    let rows = mode==="grid"?2:1;
-    let cols = mode==="grid"?2:1;
+let perPage = mode==="grid"?4:1;
+let rows = mode==="grid"?2:1;
+let cols = mode==="grid"?2:1;
 
-    const startIdx = currentPage*perPage;
+const startIdx=currentPage*perPage;
+const slice = selectedFiles.slice(startIdx,startIdx+perPage);
 
-    const slice = selectedFiles.slice(startIdx,startIdx+perPage);
+const orientation = slice[0]?.orientation || "portrait";
 
-    const orientation = slice[0]?.orientation || "portrait";
+const pageWidth = orientation==="portrait"?595:842;
+const pageHeight = orientation==="portrait"?842:595;
 
-    const pageWidth = orientation==="portrait"?595:842;
-    const pageHeight = orientation==="portrait"?842:595;
+pagePreview.style.width = pageWidth*zoom+"px";
+pagePreview.style.height = pageHeight*zoom+"px";
 
-    pagePreview.style.width = (pageWidth*zoom)+"px";
-    pagePreview.style.height = (pageHeight*zoom)+"px";
+pagePreview.innerHTML="";
 
-    pagePreview.innerHTML="";
+const imgs = await Promise.all(slice.map(i=>loadImage(i.file)));
 
-    const imgs = await Promise.all(slice.map(i=>loadImage(i.file)));
+const cellWidth = pageWidth/cols;
+const cellHeight = pageHeight/rows;
 
-    const cellWidth = pageWidth/cols;
-    const cellHeight = pageHeight/rows;
+imgs.forEach((img,idx)=>{
 
+const row=Math.floor(idx/cols);
+const col=idx%cols;
 
-    imgs.forEach((img,idx)=>{
+let w=img.width;
+let h=img.height;
 
-        const row = Math.floor(idx/cols);
-        const col = idx%cols;
+const ratio=Math.min(cellWidth/w,cellHeight/h);
 
-        let w = img.width;
-        let h = img.height;
+w*=ratio;
+h*=ratio;
 
-        const ratio = Math.min(cellWidth/w,cellHeight/h);
+const item=slice[idx];
 
-        w*=ratio;
-        h*=ratio;
+w*=item.scale;
+h*=item.scale;
 
-        const item = slice[idx];
+const x = col*cellWidth + item.offsetX*(cellWidth-w);
+const y = row*cellHeight + item.offsetY*(cellHeight-h);
 
-        w*=item.scale;
-        h*=item.scale;
+const imgEl=document.createElement("img");
 
-        const x = col*cellWidth + item.offsetX*(cellWidth-w);
-        const y = row*cellHeight + item.offsetY*(cellHeight-h);
+imgEl.src=img.src;
 
-        const imgEl = document.createElement("img");
+imgEl.style.position="absolute";
+imgEl.style.left=x*zoom+"px";
+imgEl.style.top=y*zoom+"px";
 
-        imgEl.src = img.src;
+imgEl.style.width=w*zoom+"px";
+imgEl.style.height=h*zoom+"px";
 
-        imgEl.style.position="absolute";
-        imgEl.style.left=(x*zoom)+"px";
-        imgEl.style.top=(y*zoom)+"px";
+enableDrag(imgEl,item,cellWidth,cellHeight);
 
-        imgEl.style.width=(w*zoom)+"px";
-        imgEl.style.height=(h*zoom)+"px";
+pagePreview.appendChild(imgEl);
 
-        enableDrag(imgEl,item,cellWidth,cellHeight);
+});
 
-        pagePreview.appendChild(imgEl);
-
-    });
-
-    pageInfoEl.textContent = `Page ${currentPage+1} / ${totalPages}`;
+pageInfoEl.textContent=`Page ${currentPage+1} of ${totalPages}`;
 
 }
 
 
-// EDIT POSITIONS
+// Edit button
 editPositionsBtn.addEventListener("click",async()=>{
 
-    if(selectedFiles.length===0){
-        updateStatus("Select images first");
-        return;
-    }
+if(selectedFiles.length===0){
+updateStatus("Select images first");
+return;
+}
 
-    const mode = modeSelect.value;
+const mode=modeSelect.value;
+const perPage = mode==="grid"?4:1;
 
-    let perPage = mode==="grid"?4:1;
+totalPages = Math.ceil(selectedFiles.length/perPage);
 
-    totalPages = Math.ceil(selectedFiles.length/perPage);
+currentPage=0;
+zoom=1;
 
-    currentPage=0;
-    zoom=1;
+await loadPage();
 
-    await loadPage();
-
-    modal.style.display="block";
+modal.style.display="block";
 
 });
 
 
-// PAGE NAVIGATION
-prevPageBtn.onclick = async()=>{
+// Page navigation
+prevPageBtn.onclick=async()=>{
 
-    if(currentPage>0){
-
-        currentPage--;
-
-        await loadPage();
-
-    }
+if(currentPage>0){
+currentPage--;
+await loadPage();
+}
 
 };
 
-nextPageBtn.onclick = async()=>{
+nextPageBtn.onclick=async()=>{
 
-    if(currentPage<totalPages-1){
-
-        currentPage++;
-
-        await loadPage();
-
-    }
+if(currentPage<totalPages-1){
+currentPage++;
+await loadPage();
+}
 
 };
 
 
-// ZOOM PAGE
+// Zoom
 function updateZoom(){
 
-    zoomLevelEl.textContent = Math.round(zoom*100)+"%";
+zoomLevelEl.textContent=Math.round(zoom*100)+"%";
 
-    loadPage();
+loadPage();
 
 }
 
 zoomInBtn.onclick=()=>{
 
-    zoom = Math.min(zoom+0.25,3);
+zoom=Math.min(zoom+0.25,3);
 
-    updateZoom();
+updateZoom();
 
 };
 
 zoomOutBtn.onclick=()=>{
 
-    zoom = Math.max(zoom-0.25,0.5);
+zoom=Math.max(zoom-0.25,0.5);
 
-    updateZoom();
-
-};
-
-
-// CLOSE MODAL
-closeBtn.onclick = ()=> modal.style.display="none";
-
-window.onclick = (e)=>{
-
-    if(e.target===modal){
-
-        modal.style.display="none";
-
-    }
+updateZoom();
 
 };
 
 
-// GENERATE PDF
+// Close modal
+closeBtn.onclick=()=>modal.style.display="none";
+
+window.onclick=e=>{
+if(e.target===modal){
+modal.style.display="none";
+}
+};
+
+
+// Generate PDF
 generateBtn.addEventListener("click",async()=>{
 
-    if(selectedFiles.length===0){
+if(selectedFiles.length===0){
+updateStatus("Please select images");
+return;
+}
 
-        updateStatus("Select images");
+try{
 
-        return;
+updateStatus("Loading images...");
 
-    }
+const imgs = await Promise.all(selectedFiles.map(i=>loadImage(i.file)));
 
-    try{
+const {jsPDF}=window.jspdf;
 
-        updateStatus("Loading images...");
+const mode = modeSelect.value;
 
-        const imgs = await Promise.all(selectedFiles.map(i=>loadImage(i.file)));
+let perPage = mode==="grid"?4:1;
+let rows = mode==="grid"?2:1;
+let cols = mode==="grid"?2:1;
 
-        const {jsPDF} = window.jspdf;
+let doc;
 
-        const mode = modeSelect.value;
+for(let i=0;i<imgs.length;i+=perPage){
 
-        let perPage = mode==="grid"?4:1;
-        let rows = mode==="grid"?2:1;
-        let cols = mode==="grid"?2:1;
+const orientation = selectedFiles[i].orientation;
 
-        let doc;
+if(!doc){
 
-        for(let i=0;i<imgs.length;i+=perPage){
+doc = new jsPDF({
+orientation:orientation,
+unit:"pt",
+format:"a4"
+});
 
-            const orientation = selectedFiles[i].orientation;
+}else{
 
-            if(!doc){
+doc.addPage("a4",orientation);
 
-                doc = new jsPDF({
-                    orientation:orientation,
-                    unit:"pt",
-                    format:"a4"
-                });
+}
 
-            }else{
+const pageWidth=doc.internal.pageSize.getWidth();
+const pageHeight=doc.internal.pageSize.getHeight();
 
-                doc.addPage("a4",orientation);
+const cellWidth=pageWidth/cols;
+const cellHeight=pageHeight/rows;
 
-            }
+const slice=imgs.slice(i,i+perPage);
 
-            const pageWidth = doc.internal.pageSize.getWidth();
-            const pageHeight = doc.internal.pageSize.getHeight();
+slice.forEach((img,idx)=>{
 
-            const cellWidth = pageWidth/cols;
-            const cellHeight = pageHeight/rows;
+const row=Math.floor(idx/cols);
+const col=idx%cols;
 
-            const slice = imgs.slice(i,i+perPage);
+let w=img.width;
+let h=img.height;
 
-            slice.forEach((img,idx)=>{
+const ratio=Math.min(cellWidth/w,cellHeight/h);
 
-                const row = Math.floor(idx/cols);
-                const col = idx%cols;
+w*=ratio;
+h*=ratio;
 
-                let w = img.width;
-                let h = img.height;
+const item=selectedFiles[i+idx];
 
-                const ratio = Math.min(cellWidth/w,cellHeight/h);
+w*=item.scale;
+h*=item.scale;
 
-                w*=ratio;
-                h*=ratio;
+const x=col*cellWidth + item.offsetX*(cellWidth-w);
+const y=row*cellHeight + item.offsetY*(cellHeight-h);
 
-                const item = selectedFiles[i+idx];
+doc.addImage(img.src,"JPEG",x,y,w,h);
 
-                w*=item.scale;
-                h*=item.scale;
+});
 
-                const x = col*cellWidth + item.offsetX*(cellWidth-w);
-                const y = row*cellHeight + item.offsetY*(cellHeight-h);
+}
 
-                doc.addImage(img.src,"JPEG",x,y,w,h);
+doc.save("images.pdf");
 
-            });
+updateStatus("PDF Generated");
 
-        }
+}catch(err){
 
-        doc.save("images.pdf");
+console.error(err);
 
-        updateStatus("PDF Ready");
+updateStatus("Error generating PDF");
 
-    }
-    catch(err){
-
-        console.error(err);
-
-        updateStatus("Error generating PDF");
-
-    }
+}
 
 });
 ```
