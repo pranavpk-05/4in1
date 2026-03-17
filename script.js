@@ -27,33 +27,29 @@ const nextPageBtn       = document.getElementById('nextPage');
 const pageInfoEl        = document.getElementById('pageInfo');
 
 // ── State ─────────────────────────────────────────────────────────────────────
-let selectedFiles = [];
-let currentMode   = 'grid';
-let currentPage   = 0;
-let totalPages    = 0;
-let zoom          = 1;          // canvas-level zoom (CSS transform, no DOM rebuild)
-
-// Per-page live refs for in-place updates (avoids innerHTML wipe flicker)
-let liveWrappers  = [];         // [{ wrapper, imgEl, scaleLabel, item, img, cellW, cellH, col, row }]
+let selectedFiles   = [];
+let currentMode     = 'grid';
+let currentPage     = 0;
+let totalPages      = 0;
+let zoom            = 1;
 let liveOrientation = 'portrait';
 
-// ── PDF page dimensions (points) ──────────────────────────────────────────────
+// ── PDF page dimensions (pt) ──────────────────────────────────────────────────
 const PAGE = {
   portrait:  { W: 595, H: 842 },
   landscape: { W: 842, H: 595 },
 };
 
-
 // ── Grid config ───────────────────────────────────────────────────────────────
 function getGridConfig(mode) {
   switch (mode) {
-    case 'grid':  return { perPage: 4, rows: 2, cols: 2 };
-    case 'grid6': return { perPage: 6, rows: 3, cols: 2 };
-    case 'grid8': return { perPage: 8, rows: 4, cols: 2 };
-    default:      return { perPage: 1, rows: 1, cols: 1 };
+    case 'grid':   return { perPage: 4,  rows: 2, cols: 2 };
+    case 'grid6':  return { perPage: 6,  rows: 3, cols: 2 };
+    case 'grid8':  return { perPage: 8,  rows: 4, cols: 2 };
+    case 'grid10': return { perPage: 10, rows: 5, cols: 2 };
+    default:       return { perPage: 1,  rows: 1, cols: 1 };
   }
 }
-
 
 // ── Load image from File ──────────────────────────────────────────────────────
 function loadImage(file) {
@@ -70,7 +66,6 @@ function loadImage(file) {
   });
 }
 
-
 // ── Toast ─────────────────────────────────────────────────────────────────────
 let toastTimer;
 function showToast(msg, type = '') {
@@ -79,7 +74,6 @@ function showToast(msg, type = '') {
   toastEl.className   = 'toast show ' + type;
   toastTimer = setTimeout(() => { toastEl.className = 'toast'; }, 2800);
 }
-
 
 // ── Layout button selection ───────────────────────────────────────────────────
 layoutGrid.addEventListener('click', e => {
@@ -91,11 +85,8 @@ layoutGrid.addEventListener('click', e => {
   selectedFiles.forEach(f => { f.offsetX = null; f.offsetY = null; });
 });
 
-
-// ── Upload zone drag ──────────────────────────────────────────────────────────
-uploadZone.addEventListener('dragover', e => {
-  e.preventDefault(); uploadZone.classList.add('drag-over');
-});
+// ── Upload zone drag events ───────────────────────────────────────────────────
+uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('drag-over'); });
 ['dragleave', 'drop'].forEach(evt =>
   uploadZone.addEventListener(evt, () => uploadZone.classList.remove('drag-over'))
 );
@@ -118,10 +109,10 @@ function updateActionState() {
   const has = selectedFiles.length > 0;
   editPositionsBtn.disabled = !has;
   generateBtn.disabled      = !has;
-  fileBadge.textContent = selectedFiles.length + ' selected';
-  fileBadge.style.display = has ? '' : 'none';
-  thumbLabel.style.display = has ? '' : 'none';
-  thumbCount.textContent = selectedFiles.length;
+  fileBadge.textContent     = selectedFiles.length + ' selected';
+  fileBadge.style.display   = has ? '' : 'none';
+  thumbLabel.style.display  = has ? '' : 'none';
+  thumbCount.textContent    = selectedFiles.length;
 }
 
 clearAllBtn.addEventListener('click', () => {
@@ -131,8 +122,7 @@ clearAllBtn.addEventListener('click', () => {
   updateActionState();
 });
 
-
-// ── Render thumbnails ─────────────────────────────────────────────────────────
+// ── Render thumbnail strip ────────────────────────────────────────────────────
 function renderPreview() {
   previewContainer.innerHTML = '';
   selectedFiles.forEach((item, idx) => {
@@ -176,8 +166,13 @@ function renderPreview() {
   });
 }
 
+// ── Fitted size helper ────────────────────────────────────────────────────────
+function calcFit(img, cellW, cellH, scale) {
+  const ratio = Math.min(cellW / img.width, cellH / img.height);
+  return { w: img.width * ratio * scale, h: img.height * ratio * scale };
+}
 
-// ── Apply canvas zoom (CSS transform — zero DOM rebuild, zero flicker) ─────────
+// ── Apply canvas zoom (pure CSS — zero DOM rebuild) ───────────────────────────
 function applyCanvasZoom() {
   zoomLevelEl.textContent = Math.round(zoom * 100) + '%';
   if (!liveOrientation) return;
@@ -185,8 +180,6 @@ function applyCanvasZoom() {
   updateScalerTransform(W, H);
 }
 
-// Compute the combined CSS scale (canvas zoom × fit-to-width) and apply it.
-// pagePreview dimensions are always in raw PDF-space (no zoom baked in).
 function updateScalerTransform(W, H) {
   const availW   = (previewScroll.clientWidth || window.innerWidth) - 32;
   const scaledW  = W * zoom;
@@ -195,21 +188,21 @@ function updateScalerTransform(W, H) {
 
   pagePreview.style.transform       = `scale(${total})`;
   pagePreview.style.transformOrigin = 'top center';
-  // Keep the scaler container the right height so scroll knows how tall the page is
   pagePreviewScaler.style.height    = (H * total) + 'px';
   pagePreviewScaler.style.display   = 'flex';
   pagePreviewScaler.style.justifyContent = 'center';
 }
 
+// ── Build page (only on page change — not on zoom/scale/drag) ─────────────────
+// Architecture: each image lives inside a CELL container.
+//   pagePreview (A4, overflow:hidden)
+//     └─ cell div (exact cell bounds, overflow:hidden)  ← clips zoomed image
+//          └─ wrapper div (draggable within cell)
+//               └─ img + scale controls
+//
+// item.offsetX/Y are CELL-RELATIVE.
+// For PDF: page_x = col*cellW + offsetX,  page_y = row*cellH + offsetY.
 
-// ── Calculate image fitted size in PDF space ───────────────────────────────────
-function calcFit(img, cellW, cellH, scale) {
-  const ratio = Math.min(cellW / img.width, cellH / img.height);
-  return { w: img.width * ratio * scale, h: img.height * ratio * scale };
-}
-
-
-// ── Build page DOM (only called on page change, not on zoom/scale) ─────────────
 async function loadPage() {
   const { perPage, rows, cols } = getGridConfig(currentMode);
   const startIdx = currentPage * perPage;
@@ -221,14 +214,11 @@ async function loadPage() {
   const cellW     = W / cols;
   const cellH     = H / rows;
 
-  // Set pagePreview to raw PDF dimensions — zoom is purely CSS
-  pagePreview.style.width  = W + 'px';
-  pagePreview.style.height = H + 'px';
-  pagePreview.style.transform = 'scale(1)'; // reset before measuring
-
-  // Wipe only the page content (one clear, then we never clear again during interaction)
-  pagePreview.innerHTML = '';
-  liveWrappers = [];
+  // Set page to raw PDF dimensions (zoom is CSS transform only)
+  pagePreview.style.width     = W + 'px';
+  pagePreview.style.height    = H + 'px';
+  pagePreview.style.transform = 'scale(1)';
+  pagePreview.innerHTML       = '';           // single wipe, then never again
 
   const imgs = await Promise.all(slice.map(i => loadImage(i.file)));
 
@@ -238,27 +228,43 @@ async function loadPage() {
     const col  = idx % cols;
     const { w, h } = calcFit(img, cellW, cellH, item.scale);
 
+    // Default: centre image in cell (offsets are cell-relative)
     if (item.offsetX === null || item.offsetY === null) {
-      item.offsetX = col * cellW + (cellW - w) / 2;
-      item.offsetY = row * cellH + (cellH - h) / 2;
+      item.offsetX = (cellW - w) / 2;
+      item.offsetY = (cellH - h) / 2;
     }
 
-    // ── Wrapper ──────────────────────────────────────────────────────
+    // ── Cell container ────────────────────────────────────────────────────────
+    // overflow:hidden means a scaled/dragged image can NEVER visually bleed
+    // into the neighbouring cell.
+    const cell = document.createElement('div');
+    cell.style.cssText = `
+      position: absolute;
+      left:     ${col * cellW}px;
+      top:      ${row * cellH}px;
+      width:    ${cellW}px;
+      height:   ${cellH}px;
+      overflow: hidden;
+    `;
+
+    // Optional: faint cell border so the user can see boundaries
+    cell.style.boxSizing = 'border-box';
+
+    // ── Wrapper (draggable, positioned within cell) ───────────────────────────
     const wrapper = document.createElement('div');
-    // GPU-accelerated positioning — will-change prevents repaint flicker
     wrapper.style.cssText = `
       position: absolute;
-      left:   ${item.offsetX}px;
-      top:    ${item.offsetY}px;
-      width:  ${w}px;
-      height: ${h}px;
+      left:     ${item.offsetX}px;
+      top:      ${item.offsetY}px;
+      width:    ${w}px;
+      height:   ${h}px;
       touch-action: none;
       will-change: transform, left, top;
     `;
 
-    // ── Image element ─────────────────────────────────────────────────
+    // ── Image ─────────────────────────────────────────────────────────────────
     const imgEl = document.createElement('img');
-    imgEl.src   = img.src;
+    imgEl.src       = img.src;
     imgEl.draggable = false;
     imgEl.style.cssText = `
       width: 100%; height: 100%;
@@ -267,7 +273,7 @@ async function loadPage() {
     `;
     wrapper.appendChild(imgEl);
 
-    // ── Scale label (shared ref updated in-place) ─────────────────────
+    // ── Scale label ───────────────────────────────────────────────────────────
     const scaleLabel = document.createElement('span');
     scaleLabel.style.cssText = `
       color:#e2e8f0; font-size:11px; min-width:38px;
@@ -276,20 +282,21 @@ async function loadPage() {
     const syncLabel = () => { scaleLabel.textContent = Math.round(item.scale * 100) + '%'; };
     syncLabel();
 
-    // ── In-place scale update (no DOM wipe!) ──────────────────────────
+    // ── In-place scale update (no innerHTML wipe ─ no flicker) ───────────────
+    // Resizes the wrapper in-place and re-centres within cell.
     function applyScaleInPlace() {
       const { w: nw, h: nh } = calcFit(img, cellW, cellH, item.scale);
-      const nx = col * cellW + (cellW - nw) / 2;
-      const ny = row * cellH + (cellH - nh) / 2;
-      item.offsetX = nx; item.offsetY = ny;
+      // Re-centre in cell after scale change
+      item.offsetX = (cellW - nw) / 2;
+      item.offsetY = (cellH - nh) / 2;
       wrapper.style.width  = nw + 'px';
       wrapper.style.height = nh + 'px';
-      wrapper.style.left   = nx + 'px';
-      wrapper.style.top    = ny + 'px';
+      wrapper.style.left   = item.offsetX + 'px';
+      wrapper.style.top    = item.offsetY + 'px';
       syncLabel();
     }
 
-    // ── Scale controls overlay ────────────────────────────────────────
+    // ── Scale overlay controls ─────────────────────────────────────────────────
     const controls = document.createElement('div');
     controls.className = 'img-scale-controls';
     controls.style.cssText = `
@@ -316,7 +323,7 @@ async function loadPage() {
     minusBtn.addEventListener('click', e => {
       e.stopPropagation();
       item.scale = clamp(parseFloat((item.scale - STEP).toFixed(2)));
-      applyScaleInPlace();   // ← in-place, no DOM wipe
+      applyScaleInPlace();
     });
 
     const plusBtn = document.createElement('button');
@@ -324,22 +331,20 @@ async function loadPage() {
     plusBtn.addEventListener('click', e => {
       e.stopPropagation();
       item.scale = clamp(parseFloat((item.scale + STEP).toFixed(2)));
-      applyScaleInPlace();   // ← in-place, no DOM wipe
+      applyScaleInPlace();
     });
 
     controls.append(minusBtn, scaleLabel, plusBtn);
     wrapper.appendChild(controls);
 
-    // ── Scroll-wheel scale (desktop) ──────────────────────────────────
+    // ── Scroll-wheel scale (desktop) ──────────────────────────────────────────
     wrapper.addEventListener('wheel', e => {
       e.preventDefault(); e.stopPropagation();
       item.scale = clamp(parseFloat((item.scale + (e.deltaY < 0 ? STEP : -STEP)).toFixed(2)));
-      applyScaleInPlace();   // ← in-place, no DOM wipe
+      applyScaleInPlace();
     }, { passive: false });
 
-    // ── Pinch-to-zoom ─────────────────────────────────────────────────
-    // During pinch: only CSS transform on imgEl (zero DOM changes).
-    // On touchend: commit scale, resize wrapper in-place (no wipe).
+    // ── Pinch-to-zoom (fixed: CSS-only during gesture, single commit on end) ──
     let pinchStartDist  = null;
     let pinchStartScale = 1;
     let isPinching      = false;
@@ -359,13 +364,13 @@ async function loadPage() {
     wrapper.addEventListener('touchmove', e => {
       if (!isPinching || e.touches.length !== 2) return;
       e.preventDefault(); e.stopPropagation();
-      const dist  = Math.hypot(
+      const dist   = Math.hypot(
         e.touches[0].clientX - e.touches[1].clientX,
         e.touches[0].clientY - e.touches[1].clientY
       );
       const factor = dist / pinchStartDist;
       const visual = clamp(pinchStartScale * factor) / pinchStartScale;
-      // Visually scale just the imgEl — no wrapper resize, no DOM wipe
+      // Only CSS transform on imgEl — no resize, no DOM rebuild, no flicker
       imgEl.style.transform       = `scale(${visual})`;
       imgEl.style.transformOrigin = 'center center';
       scaleLabel.textContent      = Math.round(clamp(pinchStartScale * factor) * 100) + '%';
@@ -373,33 +378,28 @@ async function loadPage() {
 
     wrapper.addEventListener('touchend', e => {
       if (!isPinching) return;
-      if (e.touches.length > 0) return; // still one finger down
+      if (e.touches.length > 0) return;   // still a finger down
       isPinching = false;
-
-      // Parse the visual scale we applied to the img
       const match  = imgEl.style.transform.match(/scale\(([\d.]+)\)/);
       const visual = match ? parseFloat(match[1]) : 1;
-      imgEl.style.transform = '';      // clear visual transform before resize
-
+      imgEl.style.transform = '';         // clear before in-place resize
       item.scale = clamp(parseFloat((pinchStartScale * visual).toFixed(2)));
-      applyScaleInPlace();             // ← resize wrapper in-place, no DOM wipe
+      applyScaleInPlace();                // resize wrapper in-place, no wipe
     }, { passive: true });
 
-    // ── Drag to reposition ────────────────────────────────────────────
-    enableDrag(wrapper, item);
+    // ── Drag within cell ──────────────────────────────────────────────────────
+    enableDrag(wrapper, item, cellW, cellH);
 
-    // Store live ref
-    liveWrappers.push({ wrapper, imgEl, scaleLabel, item, img, cellW, cellH, col, row });
-    pagePreview.appendChild(wrapper);
+    cell.appendChild(wrapper);
+    pagePreview.appendChild(cell);
   });
 
   pageInfoEl.textContent = `${currentPage + 1} / ${totalPages}`;
   updateScalerTransform(W, H);
 }
 
-
-// ── Drag (GPU layer via will-change already set on wrapper) ───────────────────
-function enableDrag(el, item) {
+// ── Drag (offsets are cell-relative) ─────────────────────────────────────────
+function enableDrag(el, item, cellW, cellH) {
   let startMX, startMY, startL, startT, dragging = false;
 
   function getPos(e) {
@@ -423,12 +423,10 @@ function enableDrag(el, item) {
     if (!dragging) return;
     if (e.touches && e.touches.length > 1) { end(); return; }
     e.preventDefault();
-    const pos   = getPos(e);
-    const newL  = startL + pos.x - startMX;
-    const newT  = startT + pos.y - startMY;
-    // Direct style mutation — GPU composited, no layout triggers
-    el.style.left = newL + 'px';
-    el.style.top  = newT + 'px';
+    const pos  = getPos(e);
+    // Update position directly — GPU composited, no layout triggers
+    el.style.left = (startL + pos.x - startMX) + 'px';
+    el.style.top  = (startT + pos.y - startMY) + 'px';
   }
 
   function end() {
@@ -436,7 +434,7 @@ function enableDrag(el, item) {
     dragging = false;
     el.style.cursor = 'grab';
     el.style.zIndex = '';
-    // Positions are already in PDF-space (pagePreview is 1× PDF dims)
+    // Persist cell-relative offsets
     item.offsetX = parseFloat(el.style.left);
     item.offsetY = parseFloat(el.style.top);
   }
@@ -451,8 +449,7 @@ function enableDrag(el, item) {
   el.style.cursor = 'grab';
 }
 
-
-// ── Swipe between pages in the editor ─────────────────────────────────────────
+// ── Swipe between pages ───────────────────────────────────────────────────────
 let swipeStartX = null;
 previewScroll.addEventListener('touchstart', e => {
   if (e.touches.length === 1) swipeStartX = e.touches[0].clientX;
@@ -462,26 +459,22 @@ previewScroll.addEventListener('touchend', e => {
   const dx = e.changedTouches[0].clientX - swipeStartX;
   swipeStartX = null;
   if (Math.abs(dx) < 60) return;
-  if (dx < 0 && currentPage < totalPages - 1) { currentPage++;  loadPage(); }
-  if (dx > 0 && currentPage > 0)              { currentPage--;  loadPage(); }
+  if (dx < 0 && currentPage < totalPages - 1) { currentPage++; loadPage(); }
+  if (dx > 0 && currentPage > 0)              { currentPage--; loadPage(); }
 }, { passive: true });
 
-
-// ── Edit Positions ────────────────────────────────────────────────────────────
+// ── Open editor ───────────────────────────────────────────────────────────────
 editPositionsBtn.addEventListener('click', async () => {
   if (!selectedFiles.length) { showToast('Select images first', 'err'); return; }
-
   const { perPage } = getGridConfig(currentMode);
   totalPages  = Math.ceil(selectedFiles.length / perPage);
   currentPage = 0;
   zoom        = 1;
   zoomLevelEl.textContent = '100%';
-
   modal.classList.add('open');
   swipeHint.style.display = totalPages > 1 ? '' : 'none';
   await loadPage();
 });
-
 
 // ── Page navigation ───────────────────────────────────────────────────────────
 prevPageBtn.addEventListener('click', () => {
@@ -491,23 +484,20 @@ nextPageBtn.addEventListener('click', () => {
   if (currentPage < totalPages - 1) { currentPage++; loadPage(); }
 });
 
-
-// ── Canvas zoom — pure CSS, no DOM rebuild ────────────────────────────────────
+// ── Canvas zoom (pure CSS) ────────────────────────────────────────────────────
 zoomInBtn.addEventListener('click',  () => { zoom = Math.min(zoom + 0.25, 3);    applyCanvasZoom(); });
 zoomOutBtn.addEventListener('click', () => { zoom = Math.max(zoom - 0.25, 0.25); applyCanvasZoom(); });
 
-
 // ── Close modal ───────────────────────────────────────────────────────────────
 function closeModal() { modal.classList.remove('open'); }
-modalClose.addEventListener('click',  closeModal);
+modalClose.addEventListener('click',    closeModal);
 sheetBackdrop.addEventListener('click', closeModal);
-
 
 // ── Generate PDF ──────────────────────────────────────────────────────────────
 generateBtn.addEventListener('click', async () => {
   if (!selectedFiles.length) { showToast('Please select images first', 'err'); return; }
 
-  generateBtn.disabled = true;
+  generateBtn.disabled  = true;
   generateBtn.innerHTML = '<span>⏳</span> Generating…';
   showToast('⏳ Building PDF…');
 
@@ -530,17 +520,17 @@ generateBtn.addEventListener('click', async () => {
       }
 
       imgs.slice(i, i + perPage).forEach((img, idx) => {
-        const item     = selectedFiles[i + idx];
-        const row      = Math.floor(idx / cols);
-        const col      = idx % cols;
+        const item = selectedFiles[i + idx];
+        const row  = Math.floor(idx / cols);
+        const col  = idx % cols;
         const { w, h } = calcFit(img, cellW, cellH, item.scale);
 
-        const x = item.offsetX !== null
-          ? item.offsetX
-          : col * cellW + (cellW - w) / 2;
-        const y = item.offsetY !== null
-          ? item.offsetY
-          : row * cellH + (cellH - h) / 2;
+        // item.offsetX/Y are cell-relative → convert to page-absolute
+        const ox = item.offsetX !== null ? item.offsetX : (cellW - w) / 2;
+        const oy = item.offsetY !== null ? item.offsetY : (cellH - h) / 2;
+
+        const x = col * cellW + ox;
+        const y = row * cellH + oy;
 
         doc.addImage(img.src, 'JPEG', x, y, w, h);
       });
@@ -552,7 +542,7 @@ generateBtn.addEventListener('click', async () => {
     console.error(err);
     showToast('❌ Error — check console', 'err');
   } finally {
-    generateBtn.disabled = false;
+    generateBtn.disabled  = false;
     generateBtn.innerHTML = '<span>⬇️</span> Generate PDF';
   }
 });
