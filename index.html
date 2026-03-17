@@ -1,53 +1,121 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta http-equiv="X-UA-Compatible" content="IE=edge">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Image to PDF Converter</title>
-<link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <!-- user-scalable=no stops browser native pinch-zoom from interfering -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
+  <title>ImageCraft — Image to PDF</title>
+  <meta name="description" content="Convert images to PDF instantly. Mobile-friendly with grid layouts and drag-to-reposition.">
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div class="container">
-<h1>📄 Image to PDF Converter</h1>
-<p>Select multiple images and choose conversion mode.</p>
-<div class="controls">
-<input type="file" id="images" multiple accept="image/*" style="display:block;">
-<label for="images" class="upload-btn">Choose Images</label>
-<select id="mode">
-<option value="normal">Normal (1 image per page)</option>
-<option value="grid" selected>2x2 Grid (4 images per page)</option>
-<option value="grid6">2x3 Grid (6 images per page)</option>
-<option value="grid8">2x4 Grid (8 images per page)</option>
-</select>
-<button id="editPositions" disabled>Edit Positions</button>
-<button id="generate">Generate PDF</button>
+
+<!-- ── MAIN SCREEN ─────────────────────────────────────────────── -->
+<div class="screen" id="mainScreen">
+
+  <div class="app-header">
+    <div class="app-logo">🖼️</div>
+    <div>
+      <h1>ImageCraft</h1>
+      <p class="subtitle">Image → PDF converter</p>
+    </div>
+  </div>
+
+  <!-- Upload Zone -->
+  <label class="upload-zone" id="uploadZone" for="images">
+    <div class="upload-icon">📁</div>
+    <div class="upload-text">
+      <strong>Tap to select images</strong>
+      <span>or drop them here</span>
+    </div>
+    <div class="upload-badge" id="fileBadge" style="display:none">0 selected</div>
+  </label>
+  <input type="file" id="images" multiple accept="image/*">
+
+  <!-- Layout picker -->
+  <div class="section-label">Page Layout</div>
+  <div class="layout-grid" id="layoutGrid">
+    <button class="layout-btn" data-mode="normal">
+      <span class="layout-icon">☐</span>
+      <span>1 per page</span>
+    </button>
+    <button class="layout-btn active" data-mode="grid">
+      <span class="layout-icon">⊞</span>
+      <span>2×2 grid</span>
+    </button>
+    <button class="layout-btn" data-mode="grid6">
+      <span class="layout-icon">▦</span>
+      <span>2×3 grid</span>
+    </button>
+    <button class="layout-btn" data-mode="grid8">
+      <span class="layout-icon">▩</span>
+      <span>2×4 grid</span>
+    </button>
+  </div>
+
+  <!-- Thumbnail strip -->
+  <div class="section-label" id="thumbLabel" style="display:none">
+    Images <span id="thumbCount" class="count-badge">0</span>
+    <button class="clear-btn" id="clearAll">Clear all</button>
+  </div>
+  <div id="preview" class="preview-container"></div>
+
+  <!-- Status toast -->
+  <div id="toast" class="toast"></div>
+
+  <!-- Bottom action bar -->
+  <div class="action-bar">
+    <button id="editPositions" class="action-btn secondary" disabled>
+      <span>✏️</span> Edit Positions
+    </button>
+    <button id="generate" class="action-btn primary" disabled>
+      <span>⬇️</span> Generate PDF
+    </button>
+  </div>
+
+</div><!-- /mainScreen -->
+
+
+<!-- ── EDIT MODAL (bottom-sheet style) ──────────────────────────── -->
+<div id="modal" class="modal" role="dialog" aria-modal="true" aria-label="Edit Positions">
+  <div class="sheet-backdrop" id="sheetBackdrop"></div>
+  <div class="sheet">
+    <div class="sheet-handle"></div>
+
+    <div class="sheet-header">
+      <span class="sheet-title">Edit Positions</span>
+      <div class="sheet-toolbar">
+        <!-- Zoom -->
+        <div class="ctrl-group">
+          <button class="ctrl-btn" id="zoomOut" aria-label="Zoom out">−</button>
+          <span id="zoomLevel">100%</span>
+          <button class="ctrl-btn" id="zoomIn" aria-label="Zoom in">+</button>
+        </div>
+        <!-- Page nav -->
+        <div class="ctrl-group">
+          <button class="ctrl-btn" id="prevPage" aria-label="Previous page">←</button>
+          <span id="pageInfo">1 / 1</span>
+          <button class="ctrl-btn" id="nextPage" aria-label="Next page">→</button>
+        </div>
+        <button class="close-btn" id="modalClose" aria-label="Close">✕</button>
+      </div>
+    </div>
+
+    <!-- Scrollable page preview area -->
+    <div class="preview-scroll" id="previewScroll">
+      <div class="page-preview-scaler" id="pagePreviewScaler">
+        <div id="pagePreview" class="page-preview"></div>
+      </div>
+    </div>
+
+    <!-- Swipe hint -->
+    <p class="swipe-hint" id="swipeHint" style="display:none">← Swipe to change page →</p>
+
+  </div>
 </div>
-<div id="preview" class="preview-container">
-<!-- thumbnails will appear here -->
-</div>
-<p id="status"></p>
-</div>
-<!-- EDIT POSITION MODAL -->
-<div id="modal" class="modal">
-<div class="modal-content">
-<span class="close">&times;</span>
-<h2>Edit Positions</h2>
-<div class="zoom-controls">
-<button id="zoomOut">-</button>
-<span id="zoomLevel">100%</span>
-<button id="zoomIn">+</button>
-</div>
-<div class="page-controls">
-<button id="prevPage">Prev</button>
-<span id="pageInfo">Page 1 of 1</span>
-<button id="nextPage">Next</button>
-</div>
-<div id="pagePreview" class="page-preview">
-<!-- images will be rendered here -->
-</div>
-</div>
-</div>
+
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="script.js"></script>
 </body>
