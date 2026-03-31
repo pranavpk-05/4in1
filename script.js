@@ -1,4 +1,3 @@
-// ── DOM refs ──────────────────────────────────────────────────────────────────
 const imagesInput       = document.getElementById('images');
 const generateBtn       = document.getElementById('generate');
 const editPositionsBtn  = document.getElementById('editPositions');
@@ -82,7 +81,7 @@ layoutGrid.addEventListener('click', e => {
   document.querySelectorAll('.layout-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   currentMode = btn.dataset.mode;
-  selectedFiles.forEach(f => { f.offsetX = null; f.offsetY = null; });
+  selectedFiles.forEach(f => { f.freeX = null; f.freeY = null; f.offsetX = null; f.offsetY = null; });
 });
 
 // ── Upload zone drag events ───────────────────────────────────────────────────
@@ -98,7 +97,13 @@ imagesInput.addEventListener('change', () => setFiles([...imagesInput.files]));
 
 function setFiles(files) {
   const newItems = files.map(file => ({
-    file, orientation: 'portrait', offsetX: null, offsetY: null, scale: 1
+    file,
+    orientation: 'portrait',
+    offsetX: null, offsetY: null,
+    scale: 1,
+    // Free-form canvas position (page-absolute, in PDF pt)
+    freeX: null, freeY: null,
+    freeW: null, freeH: null,
   }));
   selectedFiles = [...selectedFiles, ...newItems];
   renderPreview();
@@ -158,6 +163,7 @@ function renderPreview() {
       e.stopPropagation();
       item.orientation = item.orientation === 'portrait' ? 'landscape' : 'portrait';
       item.offsetX = null; item.offsetY = null;
+      item.freeX = null; item.freeY = null;
       updateOrientLabel();
     });
 
@@ -193,214 +199,277 @@ function updateScalerTransform(W, H) {
   pagePreviewScaler.style.justifyContent = 'center';
 }
 
-// ── Build page (only on page change — not on zoom/scale/drag) ─────────────────
-// Architecture: each image lives inside a CELL container.
-//   pagePreview (A4, overflow:hidden)
-//     └─ cell div (exact cell bounds, overflow:hidden)  ← clips zoomed image
-//          └─ wrapper div (draggable within cell)
-//               └─ img + scale controls
-//
-// item.offsetX/Y are CELL-RELATIVE.
-// For PDF: page_x = col*cellW + offsetX,  page_y = row*cellH + offsetY.
+// ═════════════════════════════════════════════════════════════════════════════
+// FREE-FORM CANVAS EDITOR
+// Images are placed freely anywhere on the page — no grid, no cell clipping.
+// Each image tracks freeX, freeY (page-absolute, PDF pt) and freeW, freeH.
+// ═════════════════════════════════════════════════════════════════════════════
 
-async function loadPage() {
-  const { perPage, rows, cols } = getGridConfig(currentMode);
+async function loadPageFreeForm() {
+  const { perPage } = getGridConfig(currentMode);
   const startIdx = currentPage * perPage;
   const slice    = selectedFiles.slice(startIdx, startIdx + perPage);
   if (!slice.length) return;
 
   liveOrientation = slice[0].orientation || 'portrait';
-  const { W, H }  = PAGE[liveOrientation];
-  const cellW     = W / cols;
-  const cellH     = H / rows;
+  const { W, H } = PAGE[liveOrientation];
 
-  // Set page to raw PDF dimensions (zoom is CSS transform only)
   pagePreview.style.width     = W + 'px';
   pagePreview.style.height    = H + 'px';
   pagePreview.style.transform = 'scale(1)';
-  pagePreview.innerHTML       = '';           // single wipe, then never again
+  pagePreview.style.position  = 'relative';
+  pagePreview.style.overflow  = 'hidden';
+  pagePreview.style.background = '#fff';
+  pagePreview.innerHTML       = '';
+
+  // Subtle grid dots background to indicate free canvas
+  const gridDots = document.createElement('div');
+  gridDots.style.cssText = `
+    position:absolute; inset:0; pointer-events:none; z-index:0;
+    background-image: radial-gradient(circle, #dde1ea 1px, transparent 1px);
+    background-size: 30px 30px;
+    opacity: 0.6;
+  `;
+  pagePreview.appendChild(gridDots);
 
   const imgs = await Promise.all(slice.map(i => loadImage(i.file)));
 
+  // Default layout: tile images in a loose grid as starting positions
+  const cols = Math.ceil(Math.sqrt(slice.length));
+  const cellW = W / cols;
+  const cellH = H / Math.ceil(slice.length / cols);
+
   imgs.forEach((img, idx) => {
     const item = slice[idx];
-    const row  = Math.floor(idx / cols);
-    const col  = idx % cols;
-    const { w, h } = calcFit(img, cellW, cellH, item.scale);
 
-    // Default: centre image in cell (offsets are cell-relative)
-    if (item.offsetX === null || item.offsetY === null) {
-      item.offsetX = (cellW - w) / 2;
-      item.offsetY = (cellH - h) / 2;
-    }
+    // Default free size: fit nicely in a cell-sized area
+    const defaultScale = item.scale || 1;
+    const ratio = Math.min(cellW * 0.85 / img.width, cellH * 0.85 / img.height);
+    const fw = img.width * ratio * defaultScale;
+    const fh = img.height * ratio * defaultScale;
 
-    // ── Cell container ────────────────────────────────────────────────────────
-    // overflow:hidden means a scaled/dragged image can NEVER visually bleed
-    // into the neighbouring cell.
-    const cell = document.createElement('div');
-    cell.style.cssText = `
-      position: absolute;
-      left:     ${col * cellW}px;
-      top:      ${row * cellH}px;
-      width:    ${cellW}px;
-      height:   ${cellH}px;
-      overflow: hidden;
-    `;
+    // Default position: centre of each cell slot
+    const defCol = idx % cols;
+    const defRow = Math.floor(idx / cols);
+    const defX   = defCol * cellW + (cellW - fw) / 2;
+    const defY   = defRow * cellH + (cellH - fh) / 2;
 
-    // Optional: faint cell border so the user can see boundaries
-    cell.style.boxSizing = 'border-box';
+    if (item.freeX === null || item.freeX === undefined) item.freeX = defX;
+    if (item.freeY === null || item.freeY === undefined) item.freeY = defY;
+    if (item.freeW === null || item.freeW === undefined) item.freeW = fw;
+    if (item.freeH === null || item.freeH === undefined) item.freeH = fh;
 
-    // ── Wrapper (draggable, positioned within cell) ───────────────────────────
-    const wrapper = document.createElement('div');
-    wrapper.style.cssText = `
-      position: absolute;
-      left:     ${item.offsetX}px;
-      top:      ${item.offsetY}px;
-      width:    ${w}px;
-      height:   ${h}px;
-      touch-action: none;
-      will-change: transform, left, top;
-    `;
-
-    // ── Image ─────────────────────────────────────────────────────────────────
-    const imgEl = document.createElement('img');
-    imgEl.src       = img.src;
-    imgEl.draggable = false;
-    imgEl.style.cssText = `
-      width: 100%; height: 100%;
-      display: block; user-select: none; pointer-events: none;
-      will-change: transform;
-    `;
-    wrapper.appendChild(imgEl);
-
-    // ── Scale label ───────────────────────────────────────────────────────────
-    const scaleLabel = document.createElement('span');
-    scaleLabel.style.cssText = `
-      color:#e2e8f0; font-size:11px; min-width:38px;
-      text-align:center; font-family:Inter,sans-serif;
-    `;
-    const syncLabel = () => { scaleLabel.textContent = Math.round(item.scale * 100) + '%'; };
-    syncLabel();
-
-    // ── In-place scale update (no innerHTML wipe ─ no flicker) ───────────────
-    // Resizes the wrapper in-place and re-centres within cell.
-    function applyScaleInPlace() {
-      const { w: nw, h: nh } = calcFit(img, cellW, cellH, item.scale);
-      // Re-centre in cell after scale change
-      item.offsetX = (cellW - nw) / 2;
-      item.offsetY = (cellH - nh) / 2;
-      wrapper.style.width  = nw + 'px';
-      wrapper.style.height = nh + 'px';
-      wrapper.style.left   = item.offsetX + 'px';
-      wrapper.style.top    = item.offsetY + 'px';
-      syncLabel();
-    }
-
-    // ── Scale overlay controls ─────────────────────────────────────────────────
-    const controls = document.createElement('div');
-    controls.className = 'img-scale-controls';
-    controls.style.cssText = `
-      position:absolute; bottom:6px; right:6px;
-      display:flex; align-items:center; gap:4px;
-      background:rgba(0,0,0,.65); border-radius:8px; padding:4px 6px;
-      z-index:10; pointer-events:all; user-select:none;
-      border:1px solid rgba(255,255,255,.1);
-    `;
-
-    const btnStyle = `
-      width:28px; height:28px; border-radius:6px;
-      background:rgba(108,99,255,.3); color:#fff;
-      border:1px solid rgba(108,99,255,.4);
-      font-size:16px; cursor:pointer;
-      display:flex; align-items:center; justify-content:center;
-    `;
-
-    const STEP = 0.1, MIN = 0.2, MAX = 5;
-    const clamp = v => Math.min(MAX, Math.max(MIN, v));
-
-    const minusBtn = document.createElement('button');
-    minusBtn.innerHTML = '−'; minusBtn.style.cssText = btnStyle;
-    minusBtn.addEventListener('click', e => {
-      e.stopPropagation();
-      item.scale = clamp(parseFloat((item.scale - STEP).toFixed(2)));
-      applyScaleInPlace();
-    });
-
-    const plusBtn = document.createElement('button');
-    plusBtn.innerHTML = '+'; plusBtn.style.cssText = btnStyle;
-    plusBtn.addEventListener('click', e => {
-      e.stopPropagation();
-      item.scale = clamp(parseFloat((item.scale + STEP).toFixed(2)));
-      applyScaleInPlace();
-    });
-
-    controls.append(minusBtn, scaleLabel, plusBtn);
-    wrapper.appendChild(controls);
-
-    // ── Scroll-wheel scale (desktop) ──────────────────────────────────────────
-    wrapper.addEventListener('wheel', e => {
-      e.preventDefault(); e.stopPropagation();
-      item.scale = clamp(parseFloat((item.scale + (e.deltaY < 0 ? STEP : -STEP)).toFixed(2)));
-      applyScaleInPlace();
-    }, { passive: false });
-
-    // ── Pinch-to-zoom (fixed: CSS-only during gesture, single commit on end) ──
-    let pinchStartDist  = null;
-    let pinchStartScale = 1;
-    let isPinching      = false;
-
-    wrapper.addEventListener('touchstart', e => {
-      if (e.touches.length === 2) {
-        isPinching = true;
-        pinchStartDist  = Math.hypot(
-          e.touches[0].clientX - e.touches[1].clientX,
-          e.touches[0].clientY - e.touches[1].clientY
-        );
-        pinchStartScale = item.scale;
-        e.preventDefault();
-      }
-    }, { passive: false });
-
-    wrapper.addEventListener('touchmove', e => {
-      if (!isPinching || e.touches.length !== 2) return;
-      e.preventDefault(); e.stopPropagation();
-      const dist   = Math.hypot(
-        e.touches[0].clientX - e.touches[1].clientX,
-        e.touches[0].clientY - e.touches[1].clientY
-      );
-      const factor = dist / pinchStartDist;
-      const visual = clamp(pinchStartScale * factor) / pinchStartScale;
-      // Only CSS transform on imgEl — no resize, no DOM rebuild, no flicker
-      imgEl.style.transform       = `scale(${visual})`;
-      imgEl.style.transformOrigin = 'center center';
-      scaleLabel.textContent      = Math.round(clamp(pinchStartScale * factor) * 100) + '%';
-    }, { passive: false });
-
-    wrapper.addEventListener('touchend', e => {
-      if (!isPinching) return;
-      if (e.touches.length > 0) return;   // still a finger down
-      isPinching = false;
-      const match  = imgEl.style.transform.match(/scale\(([\d.]+)\)/);
-      const visual = match ? parseFloat(match[1]) : 1;
-      imgEl.style.transform = '';         // clear before in-place resize
-      item.scale = clamp(parseFloat((pinchStartScale * visual).toFixed(2)));
-      applyScaleInPlace();                // resize wrapper in-place, no wipe
-    }, { passive: true });
-
-    // ── Drag within cell ──────────────────────────────────────────────────────
-    enableDrag(wrapper, item, cellW, cellH);
-
-    cell.appendChild(wrapper);
-    pagePreview.appendChild(cell);
+    const wrapper = buildFreeItem(img, item, W, H, idx);
+    pagePreview.appendChild(wrapper);
   });
 
   pageInfoEl.textContent = `${currentPage + 1} / ${totalPages}`;
   updateScalerTransform(W, H);
 }
 
-// ── Drag (offsets are cell-relative) ─────────────────────────────────────────
-function enableDrag(el, item, cellW, cellH) {
-  let startMX, startMY, startL, startT, dragging = false;
+// ── Build a free-form draggable+resizable image element ───────────────────────
+function buildFreeItem(img, item, pageW, pageH, zIdx) {
+  const wrapper = document.createElement('div');
+  wrapper.style.cssText = `
+    position: absolute;
+    left:   ${item.freeX}px;
+    top:    ${item.freeY}px;
+    width:  ${item.freeW}px;
+    height: ${item.freeH}px;
+    z-index: ${10 + zIdx};
+    touch-action: none;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.18), 0 0 0 1.5px rgba(108,99,255,0.25);
+    border-radius: 3px;
+    cursor: grab;
+    user-select: none;
+  `;
+
+  const imgEl = document.createElement('img');
+  imgEl.src       = img.src;
+  imgEl.draggable = false;
+  imgEl.style.cssText = `
+    width: 100%; height: 100%;
+    display: block; object-fit: fill;
+    user-select: none; pointer-events: none;
+    border-radius: 3px;
+  `;
+  wrapper.appendChild(imgEl);
+
+  // ── Selection highlight ring ───────────────────────────────────────────────
+  let isSelected = false;
+  const ring = document.createElement('div');
+  ring.style.cssText = `
+    position:absolute; inset:-2px; border-radius:4px;
+    border: 2px solid rgba(108,99,255,0); pointer-events:none;
+    transition: border-color 0.15s;
+  `;
+  wrapper.appendChild(ring);
+
+  function select() {
+    if (isSelected) return;
+    isSelected = true;
+    ring.style.borderColor = 'rgba(108,99,255,0.85)';
+    wrapper.style.zIndex = '999';
+    wrapper.style.boxShadow = '0 4px 20px rgba(0,0,0,0.28), 0 0 0 2px rgba(108,99,255,0.5)';
+    // Show controls
+    controls.style.opacity = '1';
+    controls.style.pointerEvents = 'all';
+    resizeHandle.style.opacity = '1';
+    resizeHandle.style.pointerEvents = 'all';
+  }
+  function deselect() {
+    isSelected = false;
+    ring.style.borderColor = 'rgba(108,99,255,0)';
+    wrapper.style.zIndex = String(10 + zIdx);
+    wrapper.style.boxShadow = '0 2px 12px rgba(0,0,0,0.18), 0 0 0 1.5px rgba(108,99,255,0.25)';
+    controls.style.opacity = '0';
+    controls.style.pointerEvents = 'none';
+    resizeHandle.style.opacity = '0';
+    resizeHandle.style.pointerEvents = 'none';
+  }
+
+  // Deselect when clicking the page background
+  pagePreview.addEventListener('click', e => {
+    if (e.target === pagePreview || e.target.tagName === 'DIV' && !e.target.closest('[data-freeitem]')) {
+      deselect();
+    }
+  });
+
+  wrapper.dataset.freeitem = '1';
+
+  // ── Scale / size controls overlay ─────────────────────────────────────────
+  const controls = document.createElement('div');
+  controls.style.cssText = `
+    position:absolute; top:6px; right:6px;
+    display:flex; align-items:center; gap:4px;
+    background:rgba(10,10,20,0.72); border-radius:8px; padding:4px 6px;
+    z-index:20; pointer-events:none; user-select:none;
+    border:1px solid rgba(255,255,255,.12);
+    opacity:0; transition: opacity 0.15s;
+    backdrop-filter: blur(4px);
+  `;
+
+  const btnStyle = `
+    width:28px; height:28px; border-radius:6px;
+    background:rgba(108,99,255,.35); color:#fff;
+    border:1px solid rgba(108,99,255,.5);
+    font-size:16px; cursor:pointer; line-height:1;
+    display:flex; align-items:center; justify-content:center;
+    flex-shrink:0;
+  `;
+
+  const STEP = 0.1, MIN = 0.2, MAX = 5;
+  const clamp = v => Math.min(MAX, Math.max(MIN, v));
+
+  const scaleLabel = document.createElement('span');
+  scaleLabel.style.cssText = `color:#e2e8f0; font-size:11px; min-width:38px; text-align:center; font-family:sans-serif;`;
+  const syncLabel = () => {
+    // Show size as percentage of page width
+    scaleLabel.textContent = Math.round((item.freeW / pageW) * 100) + '%';
+  };
+  syncLabel();
+
+  function growImage(factor) {
+    const newW = Math.max(30, Math.min(pageW * 2, item.freeW * factor));
+    const newH = item.freeH * (newW / item.freeW);
+    item.freeW = newW;
+    item.freeH = newH;
+    wrapper.style.width  = newW + 'px';
+    wrapper.style.height = newH + 'px';
+    syncLabel();
+  }
+
+  const minusBtn = document.createElement('button');
+  minusBtn.innerHTML = '−'; minusBtn.style.cssText = btnStyle;
+  minusBtn.addEventListener('click', e => { e.stopPropagation(); growImage(1 / 1.15); });
+
+  const plusBtn = document.createElement('button');
+  plusBtn.innerHTML = '+'; plusBtn.style.cssText = btnStyle;
+  plusBtn.addEventListener('click', e => { e.stopPropagation(); growImage(1.15); });
+
+  // Delete button
+  const delBtn = document.createElement('button');
+  delBtn.innerHTML = '✕';
+  delBtn.style.cssText = btnStyle + 'background:rgba(220,50,50,.4); border-color:rgba(220,50,50,.6); margin-left:4px;';
+  delBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    // Find and remove this item from selectedFiles
+    const globalIdx = selectedFiles.indexOf(item);
+    if (globalIdx !== -1) {
+      selectedFiles.splice(globalIdx, 1);
+      renderPreview();
+      updateActionState();
+    }
+    wrapper.remove();
+  });
+
+  controls.append(minusBtn, scaleLabel, plusBtn, delBtn);
+  wrapper.appendChild(controls);
+
+  // ── Resize handle (bottom-right corner) ───────────────────────────────────
+  const resizeHandle = document.createElement('div');
+  resizeHandle.style.cssText = `
+    position:absolute; bottom:-5px; right:-5px;
+    width:16px; height:16px; border-radius:3px;
+    background:rgba(108,99,255,0.9); cursor:nwse-resize;
+    z-index:25; opacity:0; transition: opacity 0.15s;
+    border:2px solid #fff;
+  `;
+  wrapper.appendChild(resizeHandle);
+
+  // Resize drag
+  enableResizeDrag(resizeHandle, wrapper, item, syncLabel);
+
+  // ── Scroll-wheel scale ────────────────────────────────────────────────────
+  wrapper.addEventListener('wheel', e => {
+    e.preventDefault(); e.stopPropagation();
+    growImage(e.deltaY < 0 ? 1.08 : 1 / 1.08);
+    select();
+  }, { passive: false });
+
+  // ── Pinch-to-zoom ─────────────────────────────────────────────────────────
+  let pinchStartDist = null, pinchStartW, pinchStartH;
+  wrapper.addEventListener('touchstart', e => {
+    if (e.touches.length === 2) {
+      pinchStartDist = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+      pinchStartW = item.freeW;
+      pinchStartH = item.freeH;
+      e.preventDefault();
+    }
+  }, { passive: false });
+
+  wrapper.addEventListener('touchmove', e => {
+    if (pinchStartDist === null || e.touches.length !== 2) return;
+    e.preventDefault();
+    const dist = Math.hypot(
+      e.touches[0].clientX - e.touches[1].clientX,
+      e.touches[0].clientY - e.touches[1].clientY
+    );
+    const factor = dist / pinchStartDist;
+    const newW = Math.max(30, Math.min(pageW * 2, pinchStartW * factor));
+    const newH = pinchStartH * (newW / pinchStartW);
+    item.freeW = newW; item.freeH = newH;
+    wrapper.style.width  = newW + 'px';
+    wrapper.style.height = newH + 'px';
+    syncLabel();
+  }, { passive: false });
+
+  wrapper.addEventListener('touchend', e => {
+    if (e.touches.length === 0) pinchStartDist = null;
+  }, { passive: true });
+
+  // ── Free drag ─────────────────────────────────────────────────────────────
+  enableFreeDrag(wrapper, item, pagePreview, select, deselect);
+
+  return wrapper;
+}
+
+// ── Free drag (page-relative, no cell clamping) ───────────────────────────────
+function enableFreeDrag(el, item, canvas, onSelect, onDeselect) {
+  let startMX, startMY, startL, startT, dragging = false, moved = false;
 
   function getPos(e) {
     const t = e.touches ? e.touches[0] : e;
@@ -408,45 +477,99 @@ function enableDrag(el, item, cellW, cellH) {
   }
 
   function start(e) {
-    if (e.target.closest && e.target.closest('.img-scale-controls')) return;
+    if (e.target.closest && (
+      e.target.closest('.img-scale-controls') ||
+      e.target.style.cursor === 'nwse-resize'
+    )) return;
     if (e.touches && e.touches.length > 1) return;
-    dragging = true;
+    dragging = true; moved = false;
     const pos = getPos(e);
     startMX = pos.x; startMY = pos.y;
     startL  = parseFloat(el.style.left) || 0;
     startT  = parseFloat(el.style.top)  || 0;
     el.style.cursor = 'grabbing';
-    el.style.zIndex = '5';
+    el.style.transition = 'none';
+    onSelect();
   }
 
   function move(e) {
     if (!dragging) return;
     if (e.touches && e.touches.length > 1) { end(); return; }
     e.preventDefault();
-    const pos  = getPos(e);
-    // Update position directly — GPU composited, no layout triggers
-    el.style.left = (startL + pos.x - startMX) + 'px';
-    el.style.top  = (startT + pos.y - startMY) + 'px';
+    const pos = getPos(e);
+    const dx = pos.x - startMX;
+    const dy = pos.y - startMY;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) moved = true;
+    el.style.left = (startL + dx) + 'px';
+    el.style.top  = (startT + dy) + 'px';
   }
 
   function end() {
     if (!dragging) return;
     dragging = false;
     el.style.cursor = 'grab';
-    el.style.zIndex = '';
-    // Persist cell-relative offsets
-    item.offsetX = parseFloat(el.style.left);
-    item.offsetY = parseFloat(el.style.top);
+    item.freeX = parseFloat(el.style.left);
+    item.freeY = parseFloat(el.style.top);
   }
 
   el.addEventListener('mousedown',  start);
   el.addEventListener('touchstart', e => { if (e.touches.length === 1) start(e); }, { passive: false });
-  el.addEventListener('mousemove',  move);
-  el.addEventListener('touchmove',  move, { passive: false });
-  el.addEventListener('mouseup',    end);
-  el.addEventListener('mouseleave', end);
-  el.addEventListener('touchend',   end, { passive: true });
-  el.style.cursor = 'grab';
+
+  window.addEventListener('mousemove', move);
+  window.addEventListener('touchmove', move, { passive: false });
+
+  window.addEventListener('mouseup',  end);
+  window.addEventListener('touchend', end, { passive: true });
+}
+
+// ── Resize drag from corner handle ────────────────────────────────────────────
+function enableResizeDrag(handle, wrapper, item, syncLabel) {
+  let startMX, startMY, startW, startH, resizing = false;
+
+  function getPos(e) {
+    const t = e.touches ? e.touches[0] : e;
+    return { x: t.clientX, y: t.clientY };
+  }
+
+  function start(e) {
+    e.stopPropagation(); e.preventDefault();
+    resizing = true;
+    const pos = getPos(e);
+    startMX = pos.x; startMY = pos.y;
+    startW  = item.freeW;
+    startH  = item.freeH;
+  }
+
+  function move(e) {
+    if (!resizing) return;
+    e.preventDefault();
+    const pos = getPos(e);
+    const dx  = pos.x - startMX;
+    const dy  = pos.y - startMY;
+    // Maintain aspect ratio via average of dx/dy deltas
+    const avgDelta = (dx + dy) / 2;
+    const newW = Math.max(30, startW + avgDelta);
+    const newH = startH * (newW / startW);
+    item.freeW = newW; item.freeH = newH;
+    wrapper.style.width  = newW + 'px';
+    wrapper.style.height = newH + 'px';
+    if (syncLabel) syncLabel();
+  }
+
+  function end() { resizing = false; }
+
+  handle.addEventListener('mousedown',  start);
+  handle.addEventListener('touchstart', start, { passive: false });
+  window.addEventListener('mousemove',  move);
+  window.addEventListener('touchmove',  move, { passive: false });
+  window.addEventListener('mouseup',    end);
+  window.addEventListener('touchend',   end, { passive: true });
+}
+
+// ── Build page (old grid mode — used for PDF layout reference) ────────────────
+async function loadPage() {
+  // In "Edit Positions" we now always use free-form mode
+  await loadPageFreeForm();
 }
 
 // ── Swipe between pages ───────────────────────────────────────────────────────
@@ -523,16 +646,30 @@ generateBtn.addEventListener('click', async () => {
         const item = selectedFiles[i + idx];
         const row  = Math.floor(idx / cols);
         const col  = idx % cols;
-        const { w, h } = calcFit(img, cellW, cellH, item.scale);
 
-        // item.offsetX/Y are cell-relative → convert to page-absolute
-        const ox = item.offsetX !== null ? item.offsetX : (cellW - w) / 2;
-        const oy = item.offsetY !== null ? item.offsetY : (cellH - h) / 2;
+        // Use free-form position if set, else fall back to grid fit
+        let x, y, w, h;
+        if (item.freeX !== null && item.freeX !== undefined && item.freeW) {
+          x = item.freeX;
+          y = item.freeY;
+          w = item.freeW;
+          h = item.freeH;
+        } else {
+          const fit = calcFit(img, cellW, cellH, item.scale);
+          w = fit.w; h = fit.h;
+          const ox = item.offsetX !== null ? item.offsetX : (cellW - w) / 2;
+          const oy = item.offsetY !== null ? item.offsetY : (cellH - h) / 2;
+          x = col * cellW + ox;
+          y = row * cellH + oy;
+        }
 
-        const x = col * cellW + ox;
-        const y = row * cellH + oy;
+        // Clip to page bounds for PDF safety
+        const cx = Math.max(0, x);
+        const cy = Math.max(0, y);
+        const cw = Math.min(w, W - cx);
+        const ch = Math.min(h, H - cy);
 
-        doc.addImage(img.src, 'JPEG', x, y, w, h);
+        doc.addImage(img.src, 'JPEG', cx, cy, cw, ch);
       });
     }
 
