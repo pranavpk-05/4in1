@@ -32,6 +32,7 @@ let currentPage     = 0;
 let totalPages      = 0;
 let zoom            = 1;
 let liveOrientation = 'portrait';
+let autoAlignMode   = false;
 
 // ── PDF page dimensions (pt) ──────────────────────────────────────────────────
 const PAGE = {
@@ -81,7 +82,11 @@ layoutGrid.addEventListener('click', e => {
   document.querySelectorAll('.layout-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   currentMode = btn.dataset.mode;
-  selectedFiles.forEach(f => { f.freeX = null; f.freeY = null; f.offsetX = null; f.offsetY = null; });
+  selectedFiles.forEach(f => {
+    f.freeX = null; f.freeY = null;
+    f.freeW = null; f.freeH = null;
+    f.offsetX = null; f.offsetY = null;
+  });
 });
 
 // ── Upload zone drag events ───────────────────────────────────────────────────
@@ -101,7 +106,6 @@ function setFiles(files) {
     orientation: 'portrait',
     offsetX: null, offsetY: null,
     scale: 1,
-    // Free-form canvas position (page-absolute, in PDF pt)
     freeX: null, freeY: null,
     freeW: null, freeH: null,
   }));
@@ -178,7 +182,7 @@ function calcFit(img, cellW, cellH, scale) {
   return { w: img.width * ratio * scale, h: img.height * ratio * scale };
 }
 
-// ── Apply canvas zoom (pure CSS — zero DOM rebuild) ───────────────────────────
+// ── Canvas zoom ───────────────────────────────────────────────────────────────
 function applyCanvasZoom() {
   zoomLevelEl.textContent = Math.round(zoom * 100) + '%';
   if (!liveOrientation) return;
@@ -191,7 +195,6 @@ function updateScalerTransform(W, H) {
   const scaledW  = W * zoom;
   const fitExtra = scaledW > availW ? availW / scaledW : 1;
   const total    = zoom * fitExtra;
-
   pagePreview.style.transform       = `scale(${total})`;
   pagePreview.style.transformOrigin = 'top center';
   pagePreviewScaler.style.height    = (H * total) + 'px';
@@ -199,20 +202,27 @@ function updateScalerTransform(W, H) {
   pagePreviewScaler.style.justifyContent = 'center';
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// FREE-FORM CANVAS EDITOR
-// Images are placed freely anywhere on the page — no grid, no cell clipping.
-// Each image tracks freeX, freeY (page-absolute, PDF pt) and freeW, freeH.
-// ═════════════════════════════════════════════════════════════════════════════
+// ── Auto-align: snap image to fill its grid cell completely ───────────────────
+function applyAutoAlign(item, col, row, cellW, cellH) {
+  item.freeW = cellW;
+  item.freeH = cellH;
+  item.freeX = col * cellW;
+  item.freeY = row * cellH;
+}
 
+// ═════════════════════════════════════════════════════════════════════════════
+// CANVAS EDITOR
+// ═════════════════════════════════════════════════════════════════════════════
 async function loadPageFreeForm() {
-  const { perPage } = getGridConfig(currentMode);
+  const { perPage, rows, cols } = getGridConfig(currentMode);
   const startIdx = currentPage * perPage;
   const slice    = selectedFiles.slice(startIdx, startIdx + perPage);
   if (!slice.length) return;
 
   liveOrientation = slice[0].orientation || 'portrait';
   const { W, H } = PAGE[liveOrientation];
+  const cellW = W / cols;
+  const cellH = H / rows;
 
   pagePreview.style.width     = W + 'px';
   pagePreview.style.height    = H + 'px';
@@ -222,44 +232,66 @@ async function loadPageFreeForm() {
   pagePreview.style.background = '#fff';
   pagePreview.innerHTML       = '';
 
-  // Subtle grid dots background to indicate free canvas
-  const gridDots = document.createElement('div');
-  gridDots.style.cssText = `
-    position:absolute; inset:0; pointer-events:none; z-index:0;
-    background-image: radial-gradient(circle, #dde1ea 1px, transparent 1px);
-    background-size: 30px 30px;
-    opacity: 0.6;
-  `;
-  pagePreview.appendChild(gridDots);
+  // ── Background ────────────────────────────────────────────────────────────
+  const bgEl = document.createElement('div');
+  bgEl.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:0;';
+
+  if (autoAlignMode) {
+    // Grid cell lines
+    let lines = '';
+    for (let c = 1; c < cols; c++) {
+      const x = c * cellW;
+      lines += `<line x1="${x}" y1="0" x2="${x}" y2="${H}"
+        stroke="rgba(108,99,255,0.25)" stroke-width="1.5" stroke-dasharray="6,4"/>`;
+    }
+    for (let r = 1; r < rows; r++) {
+      const y = r * cellH;
+      lines += `<line x1="0" y1="${y}" x2="${W}" y2="${y}"
+        stroke="rgba(108,99,255,0.25)" stroke-width="1.5" stroke-dasharray="6,4"/>`;
+    }
+    // Cell index labels
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const slotIdx = r * cols + c + 1 + currentPage * perPage;
+        if (slotIdx <= selectedFiles.length) continue; // filled — no label needed
+        lines += `<text x="${c * cellW + cellW / 2}" y="${r * cellH + cellH / 2}"
+          text-anchor="middle" dominant-baseline="middle"
+          font-size="18" fill="rgba(108,99,255,0.18)" font-family="sans-serif">
+          ${slotIdx}
+        </text>`;
+      }
+    }
+    bgEl.innerHTML = `<svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg"
+      style="position:absolute;inset:0">${lines}</svg>`;
+  } else {
+    bgEl.style.backgroundImage = 'radial-gradient(circle, #dde1ea 1px, transparent 1px)';
+    bgEl.style.backgroundSize  = '30px 30px';
+    bgEl.style.opacity         = '0.55';
+  }
+  pagePreview.appendChild(bgEl);
 
   const imgs = await Promise.all(slice.map(i => loadImage(i.file)));
 
-  // Default layout: tile images in a loose grid as starting positions
-  const cols = Math.ceil(Math.sqrt(slice.length));
-  const cellW = W / cols;
-  const cellH = H / Math.ceil(slice.length / cols);
-
   imgs.forEach((img, idx) => {
     const item = slice[idx];
+    const row  = Math.floor(idx / cols);
+    const col  = idx % cols;
 
-    // Default free size: fit nicely in a cell-sized area
-    const defaultScale = item.scale || 1;
-    const ratio = Math.min(cellW * 0.85 / img.width, cellH * 0.85 / img.height);
-    const fw = img.width * ratio * defaultScale;
-    const fh = img.height * ratio * defaultScale;
+    if (autoAlignMode) {
+      // Always fill the cell slot completely
+      applyAutoAlign(item, col, row, cellW, cellH);
+    } else {
+      // Free mode: default scatter if first open
+      if (item.freeX === null || item.freeX === undefined) {
+        const ratio = Math.min(cellW * 0.85 / img.width, cellH * 0.85 / img.height);
+        item.freeW = img.width  * ratio;
+        item.freeH = img.height * ratio;
+        item.freeX = col * cellW + (cellW - item.freeW) / 2;
+        item.freeY = row * cellH + (cellH - item.freeH) / 2;
+      }
+    }
 
-    // Default position: centre of each cell slot
-    const defCol = idx % cols;
-    const defRow = Math.floor(idx / cols);
-    const defX   = defCol * cellW + (cellW - fw) / 2;
-    const defY   = defRow * cellH + (cellH - fh) / 2;
-
-    if (item.freeX === null || item.freeX === undefined) item.freeX = defX;
-    if (item.freeY === null || item.freeY === undefined) item.freeY = defY;
-    if (item.freeW === null || item.freeW === undefined) item.freeW = fw;
-    if (item.freeH === null || item.freeH === undefined) item.freeH = fh;
-
-    const wrapper = buildFreeItem(img, item, W, H, idx);
+    const wrapper = buildFreeItem(img, item, W, H, idx, cellW, cellH, col, row);
     pagePreview.appendChild(wrapper);
   });
 
@@ -267,243 +299,230 @@ async function loadPageFreeForm() {
   updateScalerTransform(W, H);
 }
 
-// ── Build a free-form draggable+resizable image element ───────────────────────
-function buildFreeItem(img, item, pageW, pageH, zIdx) {
+// ── Build draggable image element ─────────────────────────────────────────────
+function buildFreeItem(img, item, pageW, pageH, zIdx, cellW, cellH, cellCol, cellRow) {
   const wrapper = document.createElement('div');
+  wrapper.dataset.freeitem = '1';
   wrapper.style.cssText = `
-    position: absolute;
-    left:   ${item.freeX}px;
-    top:    ${item.freeY}px;
-    width:  ${item.freeW}px;
-    height: ${item.freeH}px;
-    z-index: ${10 + zIdx};
-    touch-action: none;
-    box-shadow: 0 2px 12px rgba(0,0,0,0.18), 0 0 0 1.5px rgba(108,99,255,0.25);
-    border-radius: 3px;
-    cursor: grab;
-    user-select: none;
+    position:absolute;
+    left:${item.freeX}px; top:${item.freeY}px;
+    width:${item.freeW}px; height:${item.freeH}px;
+    z-index:${10 + zIdx};
+    touch-action:none;
+    box-shadow:0 2px 14px rgba(0,0,0,0.2), 0 0 0 1.5px rgba(108,99,255,0.22);
+    border-radius:2px; cursor:grab; user-select:none; overflow:hidden;
   `;
 
   const imgEl = document.createElement('img');
   imgEl.src       = img.src;
   imgEl.draggable = false;
   imgEl.style.cssText = `
-    width: 100%; height: 100%;
-    display: block; object-fit: fill;
-    user-select: none; pointer-events: none;
-    border-radius: 3px;
+    width:100%; height:100%; display:block;
+    object-fit:${autoAlignMode ? 'cover' : 'fill'};
+    user-select:none; pointer-events:none;
   `;
   wrapper.appendChild(imgEl);
 
-  // ── Selection highlight ring ───────────────────────────────────────────────
+  // Selection ring
   let isSelected = false;
   const ring = document.createElement('div');
   ring.style.cssText = `
-    position:absolute; inset:-2px; border-radius:4px;
-    border: 2px solid rgba(108,99,255,0); pointer-events:none;
-    transition: border-color 0.15s;
+    position:absolute; inset:-2px; border-radius:3px;
+    border:2.5px solid rgba(108,99,255,0);
+    pointer-events:none; transition:border-color 0.12s; z-index:2;
   `;
   wrapper.appendChild(ring);
 
   function select() {
     if (isSelected) return;
     isSelected = true;
-    ring.style.borderColor = 'rgba(108,99,255,0.85)';
+    ring.style.borderColor = 'rgba(108,99,255,0.9)';
     wrapper.style.zIndex = '999';
-    wrapper.style.boxShadow = '0 4px 20px rgba(0,0,0,0.28), 0 0 0 2px rgba(108,99,255,0.5)';
-    // Show controls
+    wrapper.style.boxShadow = '0 6px 28px rgba(0,0,0,0.3), 0 0 0 2px rgba(108,99,255,0.55)';
     controls.style.opacity = '1';
     controls.style.pointerEvents = 'all';
     resizeHandle.style.opacity = '1';
     resizeHandle.style.pointerEvents = 'all';
   }
+
   function deselect() {
+    if (!isSelected) return;
     isSelected = false;
     ring.style.borderColor = 'rgba(108,99,255,0)';
     wrapper.style.zIndex = String(10 + zIdx);
-    wrapper.style.boxShadow = '0 2px 12px rgba(0,0,0,0.18), 0 0 0 1.5px rgba(108,99,255,0.25)';
+    wrapper.style.boxShadow = '0 2px 14px rgba(0,0,0,0.2), 0 0 0 1.5px rgba(108,99,255,0.22)';
     controls.style.opacity = '0';
     controls.style.pointerEvents = 'none';
     resizeHandle.style.opacity = '0';
     resizeHandle.style.pointerEvents = 'none';
   }
 
-  // Deselect when clicking the page background
-  pagePreview.addEventListener('click', e => {
-    if (e.target === pagePreview || e.target.tagName === 'DIV' && !e.target.closest('[data-freeitem]')) {
-      deselect();
-    }
+  pagePreview.addEventListener('pointerdown', e => {
+    if (!wrapper.contains(e.target)) deselect();
   });
 
-  wrapper.dataset.freeitem = '1';
-
-  // ── Scale / size controls overlay ─────────────────────────────────────────
+  // ── Controls ──────────────────────────────────────────────────────────────
   const controls = document.createElement('div');
   controls.style.cssText = `
     position:absolute; top:6px; right:6px;
     display:flex; align-items:center; gap:4px;
-    background:rgba(10,10,20,0.72); border-radius:8px; padding:4px 6px;
+    background:rgba(8,8,20,0.82); border-radius:8px; padding:4px 7px;
     z-index:20; pointer-events:none; user-select:none;
-    border:1px solid rgba(255,255,255,.12);
-    opacity:0; transition: opacity 0.15s;
-    backdrop-filter: blur(4px);
+    border:1px solid rgba(255,255,255,.1);
+    opacity:0; transition:opacity 0.13s;
+    backdrop-filter:blur(6px);
   `;
 
-  const btnStyle = `
+  const bs = `
     width:28px; height:28px; border-radius:6px;
-    background:rgba(108,99,255,.35); color:#fff;
+    background:rgba(108,99,255,.32); color:#fff;
     border:1px solid rgba(108,99,255,.5);
     font-size:16px; cursor:pointer; line-height:1;
-    display:flex; align-items:center; justify-content:center;
-    flex-shrink:0;
+    display:flex; align-items:center; justify-content:center; flex-shrink:0;
   `;
 
-  const STEP = 0.1, MIN = 0.2, MAX = 5;
-  const clamp = v => Math.min(MAX, Math.max(MIN, v));
-
-  const scaleLabel = document.createElement('span');
-  scaleLabel.style.cssText = `color:#e2e8f0; font-size:11px; min-width:38px; text-align:center; font-family:sans-serif;`;
-  const syncLabel = () => {
-    // Show size as percentage of page width
-    scaleLabel.textContent = Math.round((item.freeW / pageW) * 100) + '%';
+  const sizeLabel = document.createElement('span');
+  sizeLabel.style.cssText = `
+    color:#e2e8f0; font-size:11px; min-width:36px;
+    text-align:center; font-family:sans-serif;
+  `;
+  const syncSizeLabel = () => {
+    sizeLabel.textContent = Math.round((item.freeW / pageW) * 100) + '%';
   };
-  syncLabel();
+  syncSizeLabel();
 
   function growImage(factor) {
-    const newW = Math.max(30, Math.min(pageW * 2, item.freeW * factor));
+    const newW = Math.max(30, Math.min(pageW * 2.5, item.freeW * factor));
     const newH = item.freeH * (newW / item.freeW);
-    item.freeW = newW;
-    item.freeH = newH;
+    item.freeW = newW; item.freeH = newH;
     wrapper.style.width  = newW + 'px';
     wrapper.style.height = newH + 'px';
-    syncLabel();
+    syncSizeLabel();
   }
 
   const minusBtn = document.createElement('button');
-  minusBtn.innerHTML = '−'; minusBtn.style.cssText = btnStyle;
+  minusBtn.innerHTML = '−'; minusBtn.style.cssText = bs;
   minusBtn.addEventListener('click', e => { e.stopPropagation(); growImage(1 / 1.15); });
 
   const plusBtn = document.createElement('button');
-  plusBtn.innerHTML = '+'; plusBtn.style.cssText = btnStyle;
+  plusBtn.innerHTML = '+'; plusBtn.style.cssText = bs;
   plusBtn.addEventListener('click', e => { e.stopPropagation(); growImage(1.15); });
+
+  controls.append(minusBtn, sizeLabel, plusBtn);
+
+  // ── Snap-to-slot button (auto-align mode only) ───────────────────────────
+  if (autoAlignMode) {
+    const snapBtn = document.createElement('button');
+    snapBtn.innerHTML = '⊡';
+    snapBtn.title = 'Snap back to grid slot';
+    snapBtn.style.cssText = bs +
+      'background:rgba(34,197,94,.3); border-color:rgba(34,197,94,.55); margin-left:2px;';
+    snapBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      applyAutoAlign(item, cellCol, cellRow, cellW, cellH);
+      wrapper.style.left   = item.freeX + 'px';
+      wrapper.style.top    = item.freeY + 'px';
+      wrapper.style.width  = item.freeW + 'px';
+      wrapper.style.height = item.freeH + 'px';
+      syncSizeLabel();
+      showToast('↩ Snapped to slot');
+    });
+    controls.appendChild(snapBtn);
+  }
 
   // Delete button
   const delBtn = document.createElement('button');
   delBtn.innerHTML = '✕';
-  delBtn.style.cssText = btnStyle + 'background:rgba(220,50,50,.4); border-color:rgba(220,50,50,.6); margin-left:4px;';
+  delBtn.style.cssText = bs +
+    'background:rgba(220,50,50,.35); border-color:rgba(220,50,50,.55); margin-left:4px;';
   delBtn.addEventListener('click', e => {
     e.stopPropagation();
-    // Find and remove this item from selectedFiles
     const globalIdx = selectedFiles.indexOf(item);
-    if (globalIdx !== -1) {
-      selectedFiles.splice(globalIdx, 1);
-      renderPreview();
-      updateActionState();
-    }
+    if (globalIdx !== -1) { selectedFiles.splice(globalIdx, 1); renderPreview(); updateActionState(); }
     wrapper.remove();
   });
-
-  controls.append(minusBtn, scaleLabel, plusBtn, delBtn);
+  controls.appendChild(delBtn);
   wrapper.appendChild(controls);
 
-  // ── Resize handle (bottom-right corner) ───────────────────────────────────
+  // ── Resize handle ─────────────────────────────────────────────────────────
   const resizeHandle = document.createElement('div');
   resizeHandle.style.cssText = `
     position:absolute; bottom:-5px; right:-5px;
     width:16px; height:16px; border-radius:3px;
     background:rgba(108,99,255,0.9); cursor:nwse-resize;
-    z-index:25; opacity:0; transition: opacity 0.15s;
-    border:2px solid #fff;
+    z-index:25; opacity:0; transition:opacity 0.13s;
+    border:2px solid #fff; touch-action:none;
   `;
   wrapper.appendChild(resizeHandle);
+  enableResizeDrag(resizeHandle, wrapper, item, syncSizeLabel);
 
-  // Resize drag
-  enableResizeDrag(resizeHandle, wrapper, item, syncLabel);
-
-  // ── Scroll-wheel scale ────────────────────────────────────────────────────
+  // Scroll-wheel zoom
   wrapper.addEventListener('wheel', e => {
     e.preventDefault(); e.stopPropagation();
     growImage(e.deltaY < 0 ? 1.08 : 1 / 1.08);
     select();
   }, { passive: false });
 
-  // ── Pinch-to-zoom ─────────────────────────────────────────────────────────
-  let pinchStartDist = null, pinchStartW, pinchStartH;
+  // Pinch-to-zoom
+  let pinchDist0 = null, pinchW0, pinchH0;
   wrapper.addEventListener('touchstart', e => {
-    if (e.touches.length === 2) {
-      pinchStartDist = Math.hypot(
-        e.touches[0].clientX - e.touches[1].clientX,
-        e.touches[0].clientY - e.touches[1].clientY
-      );
-      pinchStartW = item.freeW;
-      pinchStartH = item.freeH;
-      e.preventDefault();
-    }
-  }, { passive: false });
-
-  wrapper.addEventListener('touchmove', e => {
-    if (pinchStartDist === null || e.touches.length !== 2) return;
-    e.preventDefault();
-    const dist = Math.hypot(
+    if (e.touches.length !== 2) return;
+    pinchDist0 = Math.hypot(
       e.touches[0].clientX - e.touches[1].clientX,
       e.touches[0].clientY - e.touches[1].clientY
     );
-    const factor = dist / pinchStartDist;
-    const newW = Math.max(30, Math.min(pageW * 2, pinchStartW * factor));
-    const newH = pinchStartH * (newW / pinchStartW);
-    item.freeW = newW; item.freeH = newH;
-    wrapper.style.width  = newW + 'px';
-    wrapper.style.height = newH + 'px';
-    syncLabel();
+    pinchW0 = item.freeW; pinchH0 = item.freeH;
+    e.preventDefault();
   }, { passive: false });
-
+  wrapper.addEventListener('touchmove', e => {
+    if (pinchDist0 === null || e.touches.length !== 2) return;
+    e.preventDefault();
+    const d = Math.hypot(
+      e.touches[0].clientX - e.touches[1].clientX,
+      e.touches[0].clientY - e.touches[1].clientY
+    );
+    const newW = Math.max(30, Math.min(pageW * 2.5, pinchW0 * (d / pinchDist0)));
+    item.freeW = newW; item.freeH = pinchH0 * (newW / pinchW0);
+    wrapper.style.width  = item.freeW + 'px';
+    wrapper.style.height = item.freeH + 'px';
+    syncSizeLabel();
+  }, { passive: false });
   wrapper.addEventListener('touchend', e => {
-    if (e.touches.length === 0) pinchStartDist = null;
+    if (e.touches.length === 0) pinchDist0 = null;
   }, { passive: true });
 
-  // ── Free drag ─────────────────────────────────────────────────────────────
-  enableFreeDrag(wrapper, item, pagePreview, select, deselect);
+  enableFreeDrag(wrapper, item, select, deselect);
 
   return wrapper;
 }
 
-// ── Free drag (page-relative, no cell clamping) ───────────────────────────────
-function enableFreeDrag(el, item, canvas, onSelect, onDeselect) {
-  let startMX, startMY, startL, startT, dragging = false, moved = false;
+// ── Free drag ─────────────────────────────────────────────────────────────────
+function enableFreeDrag(el, item, onSelect) {
+  let sx, sy, sl, st, dragging = false;
 
   function getPos(e) {
     const t = e.touches ? e.touches[0] : e;
     return { x: t.clientX, y: t.clientY };
   }
-
   function start(e) {
-    if (e.target.closest && (
-      e.target.closest('.img-scale-controls') ||
-      e.target.style.cursor === 'nwse-resize'
-    )) return;
+    if (e.target.style && e.target.style.cursor === 'nwse-resize') return;
     if (e.touches && e.touches.length > 1) return;
-    dragging = true; moved = false;
-    const pos = getPos(e);
-    startMX = pos.x; startMY = pos.y;
-    startL  = parseFloat(el.style.left) || 0;
-    startT  = parseFloat(el.style.top)  || 0;
+    dragging = true;
+    const p = getPos(e);
+    sx = p.x; sy = p.y;
+    sl = parseFloat(el.style.left) || 0;
+    st = parseFloat(el.style.top)  || 0;
     el.style.cursor = 'grabbing';
-    el.style.transition = 'none';
     onSelect();
   }
-
   function move(e) {
     if (!dragging) return;
     if (e.touches && e.touches.length > 1) { end(); return; }
     e.preventDefault();
-    const pos = getPos(e);
-    const dx = pos.x - startMX;
-    const dy = pos.y - startMY;
-    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) moved = true;
-    el.style.left = (startL + dx) + 'px';
-    el.style.top  = (startT + dy) + 'px';
+    const p = getPos(e);
+    el.style.left = (sl + p.x - sx) + 'px';
+    el.style.top  = (st + p.y - sy) + 'px';
   }
-
   function end() {
     if (!dragging) return;
     dragging = false;
@@ -514,50 +533,37 @@ function enableFreeDrag(el, item, canvas, onSelect, onDeselect) {
 
   el.addEventListener('mousedown',  start);
   el.addEventListener('touchstart', e => { if (e.touches.length === 1) start(e); }, { passive: false });
-
-  window.addEventListener('mousemove', move);
-  window.addEventListener('touchmove', move, { passive: false });
-
-  window.addEventListener('mouseup',  end);
-  window.addEventListener('touchend', end, { passive: true });
+  window.addEventListener('mousemove',  move);
+  window.addEventListener('touchmove',  move, { passive: false });
+  window.addEventListener('mouseup',    end);
+  window.addEventListener('touchend',   end, { passive: true });
 }
 
-// ── Resize drag from corner handle ────────────────────────────────────────────
+// ── Resize drag ───────────────────────────────────────────────────────────────
 function enableResizeDrag(handle, wrapper, item, syncLabel) {
-  let startMX, startMY, startW, startH, resizing = false;
-
+  let sx, sy, sw, sh, resizing = false;
   function getPos(e) {
     const t = e.touches ? e.touches[0] : e;
     return { x: t.clientX, y: t.clientY };
   }
-
   function start(e) {
     e.stopPropagation(); e.preventDefault();
     resizing = true;
-    const pos = getPos(e);
-    startMX = pos.x; startMY = pos.y;
-    startW  = item.freeW;
-    startH  = item.freeH;
+    const p = getPos(e);
+    sx = p.x; sy = p.y; sw = item.freeW; sh = item.freeH;
   }
-
   function move(e) {
     if (!resizing) return;
     e.preventDefault();
-    const pos = getPos(e);
-    const dx  = pos.x - startMX;
-    const dy  = pos.y - startMY;
-    // Maintain aspect ratio via average of dx/dy deltas
-    const avgDelta = (dx + dy) / 2;
-    const newW = Math.max(30, startW + avgDelta);
-    const newH = startH * (newW / startW);
-    item.freeW = newW; item.freeH = newH;
-    wrapper.style.width  = newW + 'px';
-    wrapper.style.height = newH + 'px';
+    const p = getPos(e);
+    const avg = ((p.x - sx) + (p.y - sy)) / 2;
+    const newW = Math.max(30, sw + avg);
+    item.freeW = newW; item.freeH = sh * (newW / sw);
+    wrapper.style.width  = item.freeW + 'px';
+    wrapper.style.height = item.freeH + 'px';
     if (syncLabel) syncLabel();
   }
-
   function end() { resizing = false; }
-
   handle.addEventListener('mousedown',  start);
   handle.addEventListener('touchstart', start, { passive: false });
   window.addEventListener('mousemove',  move);
@@ -566,11 +572,7 @@ function enableResizeDrag(handle, wrapper, item, syncLabel) {
   window.addEventListener('touchend',   end, { passive: true });
 }
 
-// ── Build page (old grid mode — used for PDF layout reference) ────────────────
-async function loadPage() {
-  // In "Edit Positions" we now always use free-form mode
-  await loadPageFreeForm();
-}
+async function loadPage() { await loadPageFreeForm(); }
 
 // ── Swipe between pages ───────────────────────────────────────────────────────
 let swipeStartX = null;
@@ -586,6 +588,72 @@ previewScroll.addEventListener('touchend', e => {
   if (dx > 0 && currentPage > 0)              { currentPage--; loadPage(); }
 }, { passive: true });
 
+// ── Inject Auto Align toggle into the modal toolbar ───────────────────────────
+function injectAlignToggle() {
+  if (document.getElementById('alignToggle')) return;
+  const toolbar = document.querySelector('.sheet-toolbar');
+  if (!toolbar) return;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'ctrl-group';
+
+  const btn = document.createElement('button');
+  btn.id = 'alignToggle';
+  btn.style.cssText = `
+    display:flex; align-items:center; gap:6px;
+    padding:0 11px; height:32px; border-radius:8px;
+    font-size:12px; font-weight:600; cursor:pointer;
+    white-space:nowrap; letter-spacing:0.02em;
+    transition:background 0.15s, border-color 0.15s, color 0.15s;
+    background:rgba(108,99,255,0.12);
+    border:1.5px solid rgba(108,99,255,0.3);
+    color:#a5b4fc;
+  `;
+
+  const indicator = document.createElement('span');
+  indicator.style.cssText = `
+    width:8px; height:8px; border-radius:50%; flex-shrink:0;
+    transition:background 0.15s; background:rgba(108,99,255,0.45);
+    display:inline-block;
+  `;
+  const label = document.createElement('span');
+
+  function syncUI() {
+    if (autoAlignMode) {
+      label.textContent        = 'Auto Aligned';
+      indicator.style.background = '#818cf8';
+      btn.style.background     = 'rgba(108,99,255,0.28)';
+      btn.style.borderColor    = 'rgba(108,99,255,0.72)';
+      btn.style.color          = '#c7d2fe';
+    } else {
+      label.textContent        = 'Auto Align';
+      indicator.style.background = 'rgba(108,99,255,0.4)';
+      btn.style.background     = 'rgba(108,99,255,0.12)';
+      btn.style.borderColor    = 'rgba(108,99,255,0.3)';
+      btn.style.color          = '#a5b4fc';
+    }
+  }
+  syncUI();
+
+  btn.addEventListener('click', async () => {
+    autoAlignMode = !autoAlignMode;
+    // Clear stored positions so alignment re-runs fresh
+    selectedFiles.forEach(f => {
+      f.freeX = null; f.freeY = null;
+      f.freeW = null; f.freeH = null;
+    });
+    syncUI();
+    showToast(autoAlignMode ? '⊞ Images snapped to grid slots' : '✏️ Free positioning mode');
+    await loadPage();
+  });
+
+  btn.append(indicator, label);
+  wrap.appendChild(btn);
+
+  const closeBtn = toolbar.querySelector('.close-btn');
+  closeBtn ? toolbar.insertBefore(wrap, closeBtn) : toolbar.appendChild(wrap);
+}
+
 // ── Open editor ───────────────────────────────────────────────────────────────
 editPositionsBtn.addEventListener('click', async () => {
   if (!selectedFiles.length) { showToast('Select images first', 'err'); return; }
@@ -596,18 +664,15 @@ editPositionsBtn.addEventListener('click', async () => {
   zoomLevelEl.textContent = '100%';
   modal.classList.add('open');
   swipeHint.style.display = totalPages > 1 ? '' : 'none';
+  injectAlignToggle();
   await loadPage();
 });
 
 // ── Page navigation ───────────────────────────────────────────────────────────
-prevPageBtn.addEventListener('click', () => {
-  if (currentPage > 0) { currentPage--; loadPage(); }
-});
-nextPageBtn.addEventListener('click', () => {
-  if (currentPage < totalPages - 1) { currentPage++; loadPage(); }
-});
+prevPageBtn.addEventListener('click', () => { if (currentPage > 0) { currentPage--; loadPage(); } });
+nextPageBtn.addEventListener('click', () => { if (currentPage < totalPages - 1) { currentPage++; loadPage(); } });
 
-// ── Canvas zoom (pure CSS) ────────────────────────────────────────────────────
+// ── Canvas zoom ───────────────────────────────────────────────────────────────
 zoomInBtn.addEventListener('click',  () => { zoom = Math.min(zoom + 0.25, 3);    applyCanvasZoom(); });
 zoomOutBtn.addEventListener('click', () => { zoom = Math.max(zoom - 0.25, 0.25); applyCanvasZoom(); });
 
@@ -619,7 +684,6 @@ sheetBackdrop.addEventListener('click', closeModal);
 // ── Generate PDF ──────────────────────────────────────────────────────────────
 generateBtn.addEventListener('click', async () => {
   if (!selectedFiles.length) { showToast('Please select images first', 'err'); return; }
-
   generateBtn.disabled  = true;
   generateBtn.innerHTML = '<span>⏳</span> Generating…';
   showToast('⏳ Building PDF…');
@@ -647,13 +711,10 @@ generateBtn.addEventListener('click', async () => {
         const row  = Math.floor(idx / cols);
         const col  = idx % cols;
 
-        // Use free-form position if set, else fall back to grid fit
         let x, y, w, h;
         if (item.freeX !== null && item.freeX !== undefined && item.freeW) {
-          x = item.freeX;
-          y = item.freeY;
-          w = item.freeW;
-          h = item.freeH;
+          x = item.freeX; y = item.freeY;
+          w = item.freeW; h = item.freeH;
         } else {
           const fit = calcFit(img, cellW, cellH, item.scale);
           w = fit.w; h = fit.h;
@@ -663,12 +724,8 @@ generateBtn.addEventListener('click', async () => {
           y = row * cellH + oy;
         }
 
-        // Clip to page bounds for PDF safety
-        const cx = Math.max(0, x);
-        const cy = Math.max(0, y);
-        const cw = Math.min(w, W - cx);
-        const ch = Math.min(h, H - cy);
-
+        const cx = Math.max(0, x), cy = Math.max(0, y);
+        const cw = Math.min(w, W - cx), ch = Math.min(h, H - cy);
         doc.addImage(img.src, 'JPEG', cx, cy, cw, ch);
       });
     }
